@@ -2,7 +2,7 @@
 
 COVERAGE_FILE ?= coverage.out
 
-all: fmt test coverage
+all: fmt lint test coverage
 
 ## fmt: Format all Go source files
 fmt:

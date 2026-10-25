@@ -111,3 +111,7 @@ func Execute(name string, rawArgs string) error {
 
 	return fn(rawArgs)
 }
+
+var ToolsList = []openai.ChatCompletionToolUnionParam{
+	ReadTool.ToParam(),
+}
