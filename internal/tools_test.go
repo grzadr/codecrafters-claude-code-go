@@ -221,14 +221,69 @@ func TestWriteTool_ToParam(t *testing.T) {
 	}
 }
 
+func TestExecute_Bash(t *testing.T) {
+	rawArgs := `{"command":"echo hello"}`
+	output, err := tools.Execute("Bash", rawArgs)
+	if err != nil {
+		t.Fatalf("unexpected error executing Bash: %v", err)
+	}
+	if len(output) != 0 {
+		t.Errorf("expected empty output from dummy runCommand, got %q", string(output))
+	}
+}
+
+func TestExecute_Bash_InvalidJSON(t *testing.T) {
+	_, err := tools.Execute("Bash", "{invalid-json")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+	}
+}
+
+func TestBashTool_ToParam(t *testing.T) {
+	param := tools.BashTool.ToParam()
+	fnDef := param.OfFunction.Function
+
+	if fnDef.Name != "Bash" {
+		t.Errorf("expected function name 'Bash', got %q", fnDef.Name)
+	}
+
+	if fnDef.Description.Value != "Execute a shell command" {
+		t.Errorf("unexpected description: %v", fnDef.Description.Value)
+	}
+
+	params := fnDef.Parameters
+	if params["type"] != "object" {
+		t.Errorf("expected type 'object', got %v", params["type"])
+	}
+
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected properties map, got %T", params["properties"])
+	}
+
+	commandProp, ok := props["command"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected command property, got %T", props["command"])
+	}
+	if commandProp["type"] != "string" {
+		t.Errorf("expected string type for command, got %v", commandProp["type"])
+	}
+	if commandProp["description"] != "The command to execute" {
+		t.Errorf("unexpected description for command: %v", commandProp["description"])
+	}
+}
+
 func TestToolsList(t *testing.T) {
-	if len(tools.ToolsList) != 2 {
-		t.Fatalf("expected 2 tools in ToolsList, got %d", len(tools.ToolsList))
+	if len(tools.ToolsList) != 3 {
+		t.Fatalf("expected 3 tools in ToolsList, got %d", len(tools.ToolsList))
 	}
 	if tools.ToolsList[0].OfFunction.Function.Name != "Read" {
 		t.Errorf("expected first tool name 'Read', got %q", tools.ToolsList[0].OfFunction.Function.Name)
 	}
 	if tools.ToolsList[1].OfFunction.Function.Name != "Write" {
 		t.Errorf("expected second tool name 'Write', got %q", tools.ToolsList[1].OfFunction.Function.Name)
+	}
+	if tools.ToolsList[2].OfFunction.Function.Name != "Bash" {
+		t.Errorf("expected third tool name 'Bash', got %q", tools.ToolsList[2].OfFunction.Function.Name)
 	}
 }

@@ -87,11 +87,6 @@ func ReadFunc(rawArgs string) ([]byte, error) {
 	return readFile(args.FilePath)
 }
 
-var ToolsRegistry = map[string]func(rawArgs string) ([]byte, error){
-	"Read":  ReadFunc,
-	"Write": WriteFunc,
-}
-
 var WriteTool = Tool{
 	Type: "function",
 	Function: Function{
@@ -136,6 +131,48 @@ func WriteFunc(rawArgs string) ([]byte, error) {
 	return nil, nil
 }
 
+var BashTool = Tool{
+	Type: "function",
+	Function: Function{
+		Name:        "Bash",
+		Description: "Execute a shell command",
+		Parameters: Parameter{
+			Type: "object",
+			Properties: map[string]Property{
+				"command": {
+					Type:        "string",
+					Description: "The command to execute",
+				},
+			},
+			Required: []string{"command"},
+		},
+	},
+}
+
+func runCommand(command string) ([]byte, error) {
+	_ = command
+	return nil, nil
+}
+
+type BashArgs struct {
+	Command string `json:"command"`
+}
+
+func BashFunc(rawArgs string) ([]byte, error) {
+	var args BashArgs
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return nil, err
+	}
+
+	return runCommand(args.Command)
+}
+
+var ToolsRegistry = map[string]func(rawArgs string) ([]byte, error){
+	"Read":  ReadFunc,
+	"Write": WriteFunc,
+	"Bash":  BashFunc,
+}
+
 func Execute(name string, rawArgs string) ([]byte, error) {
 	fn, ok := ToolsRegistry[name]
 	if !ok {
@@ -148,4 +185,5 @@ func Execute(name string, rawArgs string) ([]byte, error) {
 var ToolsList = []openai.ChatCompletionToolUnionParam{
 	ReadTool.ToParam(),
 	WriteTool.ToParam(),
+	BashTool.ToParam(),
 }
