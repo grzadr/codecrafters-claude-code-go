@@ -3,7 +3,6 @@ package tools_test
 import (
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,32 +10,6 @@ import (
 
 	tools "github.com/codecrafters-io/claude-code-starter-go/internal"
 )
-
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
-	}
-
-	origStdout := os.Stdout
-	os.Stdout = w
-	defer func() {
-		os.Stdout = origStdout
-	}()
-
-	fn()
-
-	if closeErr := w.Close(); closeErr != nil {
-		t.Fatalf("failed to close writer: %v", closeErr)
-	}
-
-	out, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("failed to read pipe output: %v", err)
-	}
-	return string(out)
-}
 
 func TestExecute_Read(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -47,21 +20,17 @@ func TestExecute_Read(t *testing.T) {
 	}
 
 	rawArgs := `{"file_path":"` + filePath + `"}`
-	var execErr error
-	output := captureStdout(t, func() {
-		execErr = tools.Execute("Read", rawArgs)
-	})
-
-	if execErr != nil {
-		t.Fatalf("unexpected error executing Read: %v", execErr)
+	output, err := tools.Execute("Read", rawArgs)
+	if err != nil {
+		t.Fatalf("unexpected error executing Read: %v", err)
 	}
-	if output != expectedContent {
-		t.Errorf("expected stdout %q, got %q", expectedContent, output)
+	if string(output) != expectedContent {
+		t.Errorf("expected output %q, got %q", expectedContent, string(output))
 	}
 }
 
 func TestExecute_Read_InvalidJSON(t *testing.T) {
-	err := tools.Execute("Read", "{invalid-json")
+	_, err := tools.Execute("Read", "{invalid-json")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON, got nil")
 	}
@@ -69,7 +38,7 @@ func TestExecute_Read_InvalidJSON(t *testing.T) {
 
 func TestExecute_Read_FileNotFound(t *testing.T) {
 	rawArgs := `{"file_path":"/nonexistent/file/path.txt"}`
-	err := tools.Execute("Read", rawArgs)
+	_, err := tools.Execute("Read", rawArgs)
 	if err == nil {
 		t.Fatal("expected error for non-existent file, got nil")
 	}
@@ -79,7 +48,7 @@ func TestExecute_Read_FileNotFound(t *testing.T) {
 }
 
 func TestExecute_UnknownTool(t *testing.T) {
-	err := tools.Execute("NonExistentTool", "{}")
+	_, err := tools.Execute("NonExistentTool", "{}")
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
 	}
@@ -94,24 +63,28 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 	}
 
 	greetCalled := false
-	tools.ToolsRegistry["Greet"] = func(rawArgs string) error {
+	tools.ToolsRegistry["Greet"] = func(rawArgs string) ([]byte, error) {
 		var args GreetArgs
 		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-			return err
+			return nil, err
 		}
 		if args.Name != "Claude" {
-			return errors.New("unexpected name")
+			return nil, errors.New("unexpected name")
 		}
 		greetCalled = true
-		return nil
+		return []byte("Hello, Claude!"), nil
 	}
 	defer delete(tools.ToolsRegistry, "Greet")
 
-	if err := tools.Execute("Greet", `{"name":"Claude"}`); err != nil {
+	res, err := tools.Execute("Greet", `{"name":"Claude"}`)
+	if err != nil {
 		t.Fatalf("unexpected error for custom tool: %v", err)
 	}
 	if !greetCalled {
 		t.Fatal("expected custom tool to be called")
+	}
+	if string(res) != "Hello, Claude!" {
+		t.Errorf("expected %q, got %q", "Hello, Claude!", string(res))
 	}
 }
 
@@ -146,3 +119,22 @@ func TestTool_ToParam(t *testing.T) {
 		t.Errorf("expected string type for file_path, got %v", filePathProp["type"])
 	}
 }
+
+func TestToolsList(t *testing.T) {
+	if len(tools.ToolsList) != 1 {
+		t.Fatalf("expected 1 tool in ToolsList, got %d", len(tools.ToolsList))
+	}
+	if tools.ToolsList[0].OfFunction.Function.Name != "Read" {
+		t.Errorf("expected function name 'Read', got %q", tools.ToolsList[0].OfFunction.Function.Name)
+	}
+}
+
+func TestToolsList(t *testing.T) {
+	if len(tools.ToolsList) != 1 {
+		t.Fatalf("expected 1 tool in ToolsList, got %d", len(tools.ToolsList))
+	}
+	if tools.ToolsList[0].OfFunction.Function.Name != "Read" {
+		t.Errorf("expected function name 'Read', got %q", tools.ToolsList[0].OfFunction.Function.Name)
+	}
+}
+
