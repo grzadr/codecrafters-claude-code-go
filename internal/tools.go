@@ -2,9 +2,7 @@ package tools
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 
 	"github.com/openai/openai-go/v3"
@@ -72,41 +70,31 @@ var ReadTool = Tool{
 	},
 }
 
-func PrintFile(filename string) (err error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return err
-	}
-
-	defer func() {
-		err = errors.Join(err, file.Close())
-	}()
-
-	_, err = io.Copy(os.Stdout, file)
-	return err
+func readFile(filename string) ([]byte, error) {
+	return os.ReadFile(filename)
 }
 
 type ReadArgs struct {
 	FilePath string `json:"file_path"`
 }
 
-func ReadFunc(rawArgs string) error {
+func ReadFunc(rawArgs string) ([]byte, error) {
 	var args ReadArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return err
+		return nil, err
 	}
 
-	return PrintFile(args.FilePath)
+	return readFile(args.FilePath)
 }
 
-var ToolsRegistry = map[string]func(rawArgs string) error{
+var ToolsRegistry = map[string]func(rawArgs string) ([]byte, error){
 	"Read": ReadFunc,
 }
 
-func Execute(name string, rawArgs string) error {
+func Execute(name string, rawArgs string) ([]byte, error) {
 	fn, ok := ToolsRegistry[name]
 	if !ok {
-		return fmt.Errorf("unknown tool: %s", name)
+		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 
 	return fn(rawArgs)

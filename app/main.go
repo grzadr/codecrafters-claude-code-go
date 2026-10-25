@@ -74,19 +74,38 @@ func main() {
 			panic("No choices in response")
 		}
 
-		// You can use print statements as follows for debugging, they'll be visible when running tests.
-		fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
+		// // You can use print statements as follows for debugging, they'll be visible when running tests.
+		// fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
 		msg := resp.Choices[0].Message
+		messages = append(messages, msg.ToParam())
 		if len(msg.ToolCalls) > 0 {
-			tc := msg.ToolCalls[0]
-			if err := tools.Execute(tc.Function.Name, tc.Function.Arguments); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
+			for _, tc := range msg.ToolCalls {
+				data, err := tools.Execute(tc.Function.Name, tc.Function.Arguments)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+					os.Exit(1)
+				}
+
+				// tc.ID
+
+				messages = append(messages, openai.ChatCompletionMessageParamUnion{
+					OfTool: &openai.ChatCompletionToolMessageParam{
+						ToolCallID: tc.ID,
+						Role:       "tool",
+						Content: openai.ChatCompletionToolMessageParamContentUnion{
+							OfString: openai.String(string(data)),
+						},
+					}})
+
 			}
+
 		} else {
-			fmt.Print(msg.Content)
+
+			break
 		}
 	}
+
+	fmt.Print(messages[len(messages)-1].GetContent())
 
 }
