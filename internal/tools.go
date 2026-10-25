@@ -88,7 +88,52 @@ func ReadFunc(rawArgs string) ([]byte, error) {
 }
 
 var ToolsRegistry = map[string]func(rawArgs string) ([]byte, error){
-	"Read": ReadFunc,
+	"Read":  ReadFunc,
+	"Write": WriteFunc,
+}
+
+var WriteTool = Tool{
+	Type: "function",
+	Function: Function{
+		Name:        "Write",
+		Description: "Write content to a file",
+		Parameters: Parameter{
+			Type: "object",
+			Properties: map[string]Property{
+				"file_path": {
+					Type:        "string",
+					Description: "The path of the file to write to",
+				},
+				"content": {
+					Type:        "string",
+					Description: "The content to write to the file",
+				},
+			},
+			Required: []string{"file_path", "content"},
+		},
+	},
+}
+
+func WriteStringToFile(filepath, content string) error {
+	return os.WriteFile(filepath, []byte(content), 0644)
+}
+
+type WriteArgs struct {
+	FilePath string `json:"file_path"`
+	Content  string `json:"content"`
+}
+
+func WriteFunc(rawArgs string) ([]byte, error) {
+	var args WriteArgs
+	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+		return nil, err
+	}
+
+	if err := WriteStringToFile(args.FilePath, args.Content); err != nil {
+		return nil, err
+	}
+
+	return nil, nil
 }
 
 func Execute(name string, rawArgs string) ([]byte, error) {
@@ -102,4 +147,5 @@ func Execute(name string, rawArgs string) ([]byte, error) {
 
 var ToolsList = []openai.ChatCompletionToolUnionParam{
 	ReadTool.ToParam(),
+	WriteTool.ToParam(),
 }
