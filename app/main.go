@@ -87,8 +87,6 @@ func main() {
 					os.Exit(1)
 				}
 
-				// tc.ID
-
 				messages = append(messages, openai.ChatCompletionMessageParamUnion{
 					OfTool: &openai.ChatCompletionToolMessageParam{
 						ToolCallID: tc.ID,
@@ -101,11 +99,10 @@ func main() {
 			}
 
 		} else {
-
 			break
 		}
 	}
 
-	fmt.Print(messages[len(messages)-1].GetContent())
+	fmt.Print(messages[len(messages)-1].OfAssistant.Content.OfString.Value)
 
 }

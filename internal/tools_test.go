@@ -137,4 +137,3 @@ func TestToolsList(t *testing.T) {
 		t.Errorf("expected function name 'Read', got %q", tools.ToolsList[0].OfFunction.Function.Name)
 	}
 }
-
