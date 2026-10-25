@@ -6,9 +6,10 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/codecrafters-io/claude-code-starter-go/internal"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+
+	tools "github.com/codecrafters-io/claude-code-starter-go/internal"
 )
 
 func main() {
@@ -59,6 +60,14 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
 
-	// TODO: Uncomment the line below to pass the first stage
-	fmt.Print(resp.Choices[0].Message.Content)
+	msg := resp.Choices[0].Message
+	if len(msg.ToolCalls) > 0 {
+		tc := msg.ToolCalls[0]
+		if err := tools.Execute(tc.Function.Name, tc.Function.Arguments); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Print(msg.Content)
+	}
 }
