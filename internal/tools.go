@@ -27,24 +27,6 @@ type Tool struct {
 	Function Function `json:"function"`
 }
 
-var ReadTool = Tool{
-	Type: "function",
-	Function: Function{
-		Name:        "Read",
-		Description: "Read and return the contents of a file",
-		Parameters: Parameter{
-			Type: "object",
-			Properties: map[string]Property{
-				"file_path": {
-					Type:        "string",
-					Description: "The path to the file to read",
-				},
-			},
-			Required: []string{"file_path"},
-		},
-	},
-}
-
 // ToParam converts the static Tool struct into the OpenAI SDK parameter type.
 func (t Tool) ToParam() openai.ChatCompletionToolUnionParam {
 	props := make(map[string]any, len(t.Function.Parameters.Properties))
@@ -83,25 +65,3 @@ var ReadTool = Tool{
 		},
 	},
 }
-
-// ToParam converts the static Tool struct into the OpenAI SDK parameter type.
-func (t Tool) ToParam() openai.ChatCompletionToolUnionParam {
-	props := make(map[string]any, len(t.Function.Parameters.Properties))
-	for k, v := range t.Function.Parameters.Properties {
-		props[k] = map[string]any{
-			"type":        v.Type,
-			"description": v.Description,
-		}
-	}
-
-	return openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-		Name:        t.Function.Name,
-		Description: openai.String(t.Function.Description),
-		Parameters: shared.FunctionParameters{
-			"type":       t.Function.Parameters.Type,
-			"properties": props,
-			"required":   t.Function.Parameters.Required,
-		},
-	})
-}
-
