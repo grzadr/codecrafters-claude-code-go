@@ -128,12 +128,3 @@ func TestToolsList(t *testing.T) {
 		t.Errorf("expected function name 'Read', got %q", tools.ToolsList[0].OfFunction.Function.Name)
 	}
 }
-
-func TestToolsList(t *testing.T) {
-	if len(tools.ToolsList) != 1 {
-		t.Fatalf("expected 1 tool in ToolsList, got %d", len(tools.ToolsList))
-	}
-	if tools.ToolsList[0].OfFunction.Function.Name != "Read" {
-		t.Errorf("expected function name 'Read', got %q", tools.ToolsList[0].OfFunction.Function.Name)
-	}
-}
