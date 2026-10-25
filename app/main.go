@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/codecrafters-io/claude-code-starter-go/internal"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
-	"github.com/openai/openai-go/v3/shared"
 )
-
-// var Reader =
 
 func main() {
 	var prompt string
@@ -46,23 +44,7 @@ func main() {
 				},
 			},
 			Tools: []openai.ChatCompletionToolUnionParam{
-				{OfFunction: &openai.ChatCompletionFunctionToolParam{
-					Type: "function",
-					Function: shared.FunctionDefinitionParam{
-						Name:        "Read",
-						Description: openai.String("Read and return the contents of a file"),
-						Parameters: shared.FunctionParameters{
-							"type": "object",
-							"properties": map[string]any{
-								"file_path": map[string]any{
-									"type":        "string",
-									"description": "The path to the file to read",
-								},
-							},
-							"required": []string{"file_path"},
-						},
-					},
-				}},
+				tools.ReadTool.ToParam(),
 			},
 		},
 	)
