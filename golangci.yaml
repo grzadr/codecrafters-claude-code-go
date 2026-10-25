@@ -1,0 +1,289 @@
+version: "2"
+
+run:
+  relative-path-mode: cfg
+  go: "1.27"
+
+formatters:
+  enable:
+    - gofumpt
+    - gci
+    - golines
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/codecrafters-io/claude-code-starter-go)
+      custom-order: true
+    golines:
+      max-len: 100
+      shorten-comments: true
+      reformat-tags: false
+    gofumpt:
+      extra-rules: true
+
+linters:
+  default: none
+  enable:
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - copyloopvar
+    - cyclop
+    - depguard
+    - dupl
+    - durationcheck
+    - embeddedstructfieldcheck
+    - errcheck
+    - errname
+    - errorlint
+    - exhaustive
+    - exptostd
+    - fatcontext
+    - forbidigo
+    - funcorder
+    - funlen
+    - gocheckcompilerdirectives
+    - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype
+    - gocognit
+    - goconst
+    - gocritic
+    - gocyclo
+    - godoclint
+    - godot
+    - gomoddirectives
+    - goprintffuncname
+    - gosec
+    - govet
+    - iface
+    - ineffassign
+    - intrange
+    - iotamixing
+    - loggercheck
+    - makezero
+    - mirror
+    - mnd
+    - modernize
+    - musttag
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - noctx
+    - nolintlint
+    - nonamedreturns
+    - nosprintfhostport
+    - perfsprint
+    - predeclared
+    - promlinter
+    - protogetter
+    - reassign
+    - recvcheck
+    - revive
+    - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - tagalign
+    - testableexamples
+    - testifylint
+    - testpackage
+    - tparallel
+    - unconvert
+    - unparam
+    - unqueryvet
+    - unused
+    - usestdlibvars
+    - usetesting
+    - wastedassign
+    - whitespace
+
+  settings:
+    recvcheck:
+      disable-builtin: true
+      exclusions:
+        - "*.UnmarshalText"
+
+    cyclop:
+      max-complexity: 30
+      package-average: 10.0
+
+    depguard:
+      rules:
+        deprecated:
+          files:
+            - "$all"
+          deny:
+            - pkg: github.com/golang/protobuf
+              desc: Use google.golang.org/protobuf instead.
+            - pkg: github.com/satori/go.uuid
+              desc: Use github.com/google/uuid instead.
+            - pkg: github.com/gofrs/uuid$
+              desc: Use github.com/gofrs/uuid/v5 or later.
+            - pkg: golang.org/x/net/context
+              desc: Use standard library context instead.
+        non-test files:
+          files:
+            - "!$test"
+          deny:
+            - pkg: math/rand$
+              desc: Use math/rand/v2 instead (Go 1.22+).
+        non-main files:
+          files:
+            - "!**/main.go"
+          deny:
+            - pkg: log$
+              desc: Use log/slog instead.
+
+    embeddedstructfieldcheck:
+      forbid-mutex: true
+
+    errcheck:
+      check-type-assertions: true
+
+    exhaustive:
+      check:
+        - switch
+        - map
+
+    exhaustruct:
+      exclude:
+        - ^net/http.Client$
+        - ^net/http.Cookie$
+        - ^net/http.Request$
+        - ^net/http.Response$
+        - ^net/http.Server$
+        - ^net/http.Transport$
+        - ^net/url.URL$
+        - ^os/exec.Cmd$
+        - ^reflect.StructField$
+        - ^github.com/prometheus/client_golang/.+Opts$
+        - ^github.com/spf13/cobra.Command$
+        - ^github.com/stretchr/testify/mock.Mock$
+        - ^google.golang.org/protobuf/.+Options$
+      allow-empty-returns: true
+
+    funcorder:
+      struct-method: false
+
+    funlen:
+      lines: 100
+      statements: 50
+
+    gochecksumtype:
+      default-signifies-exhaustive: false
+
+    gocognit:
+      min-complexity: 20
+
+    gocritic:
+      settings:
+        captLocal:
+          paramsOnly: false
+        underef:
+          skipRecvDeref: false
+
+    godoclint:
+      enable:
+        - no-unused-link
+        - require-stdlib-doclink
+
+    govet:
+      enable-all: true
+      disable:
+        - fieldalignment
+      settings:
+        shadow:
+          strict: true
+
+    inamedparam:
+      skip-single-param: true
+
+    mnd:
+      ignored-functions:
+        - args.Error
+        - flag.Arg
+        - flag.Duration.*
+        - flag.Float.*
+        - flag.Int.*
+        - flag.Uint.*
+        - os.Chmod
+        - os.Mkdir.*
+        - os.OpenFile
+        - os.WriteFile
+        - prometheus.ExponentialBuckets.*
+        - prometheus.LinearBuckets
+
+    nakedret:
+      max-func-lines: 0
+
+    nolintlint:
+      allow-no-explanation: [funlen, gocognit, golines]
+      require-explanation: true
+      require-specific: true
+
+    perfsprint:
+      strconcat: false
+
+    reassign:
+      patterns:
+        - ".*"
+
+    rowserrcheck:
+      packages:
+        - github.com/jmoiron/sqlx
+
+    sloglint:
+      no-global: all
+      context: scope
+
+    staticcheck:
+      checks:
+        - all
+        - -ST1000
+        - -ST1016
+        - -QF1008
+
+    tagalign:
+      align: true
+      sort: true
+
+    usetesting:
+      os-temp-dir: true
+      context-background: true
+
+  exclusions:
+    warn-unused: true
+    presets:
+      - std-error-handling
+      - common-false-positives
+    rules:
+      - source: "TODO"
+        linters: [godot]
+      - text: "should have a package comment"
+        linters: [revive]
+      - text: 'exported \S+ \S+ should have comment( \(or a comment on this block\))? or be unexported'
+        linters: [revive]
+      - text: 'package comment should be of the form ".+"'
+        source: "// ?(nolint|TODO)"
+        linters: [revive]
+      - text: 'comment on exported \S+ \S+ should be of the form ".+"'
+        source: "// ?(nolint|TODO)"
+        linters: [revive, staticcheck]
+      - path: '_test\.go'
+        linters:
+          - bodyclose
+          - dupl
+          - errcheck
+          - funlen
+          - goconst
+          - gosec
+          - noctx
+          - wrapcheck
