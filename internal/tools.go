@@ -1,9 +1,15 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
@@ -78,7 +84,7 @@ type ReadArgs struct {
 	FilePath string `json:"file_path"`
 }
 
-func ReadFunc(rawArgs string) ([]byte, error) {
+func ReadFunc(_ context.Context, rawArgs string) ([]byte, error) {
 	var args ReadArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return nil, err
@@ -118,7 +124,7 @@ type WriteArgs struct {
 	Content  string `json:"content"`
 }
 
-func WriteFunc(rawArgs string) ([]byte, error) {
+func WriteFunc(_ context.Context, rawArgs string) ([]byte, error) {
 	var args WriteArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return nil, err
@@ -149,37 +155,101 @@ var BashTool = Tool{
 	},
 }
 
-func runCommand(command string) ([]byte, error) {
-	_ = command
-	return nil, nil
+type ProcessError struct {
+	Code int
+	Err  error
+}
+
+func (e *ProcessError) Error() string {
+	return fmt.Sprintf("command exited with code %d: %v", e.Code, e.Err)
+}
+
+func (e *ProcessError) Unwrap() error {
+	return e.Err
+}
+
+type commandResult struct {
+	output []byte
+	err    error
+}
+
+func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) ([]byte, error) {
+	if len(args) == 0 {
+		return nil, errors.New("command arguments slice cannot be empty")
+	}
+
+	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
+
+	// Send SIGTERM on context cancellation instead of the default SIGKILL.
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+
+	// Maximum time to wait after SIGTERM before escalating to SIGKILL.
+	cmd.WaitDelay = gracePeriod
+
+	resCh := make(chan commandResult, 1)
+
+	go func() {
+		out, err := cmd.CombinedOutput()
+		resCh <- commandResult{
+			output: out,
+			err:    err,
+		}
+	}()
+
+	// Blocks until the command and its I/O pipes have fully closed,
+	// ensuring all buffers are drained even after cancellation.
+	res := <-resCh
+
+	if res.err != nil {
+		var exitErr *exec.ExitError
+		code := -1
+		if errors.As(res.err, &exitErr) {
+			code = exitErr.ExitCode()
+		}
+
+		return res.output, &ProcessError{
+			Code: code,
+			Err:  res.err,
+		}
+	}
+
+	return res.output, nil
 }
 
 type BashArgs struct {
 	Command string `json:"command"`
 }
 
-func BashFunc(rawArgs string) ([]byte, error) {
+func (a BashArgs) Split() []string {
+	return strings.Split(a.Command, " ")
+}
+
+const BASH_DURATION = 100
+
+func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 	var args BashArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
 		return nil, err
 	}
 
-	return runCommand(args.Command)
+	return runCommand(ctx, args.Split(), time.Second*time.Duration(BASH_DURATION))
 }
 
-var ToolsRegistry = map[string]func(rawArgs string) ([]byte, error){
+var ToolsRegistry = map[string]func(ctx context.Context, rawArgs string) ([]byte, error){
 	"Read":  ReadFunc,
 	"Write": WriteFunc,
 	"Bash":  BashFunc,
 }
 
-func Execute(name string, rawArgs string) ([]byte, error) {
+func Execute(ctx context.Context, name string, rawArgs string) ([]byte, error) {
 	fn, ok := ToolsRegistry[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
 
-	return fn(rawArgs)
+	return fn(ctx, rawArgs)
 }
 
 var ToolsList = []openai.ChatCompletionToolUnionParam{

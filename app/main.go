@@ -58,8 +58,10 @@ func main() {
 		},
 	}
 
+	ctx := context.Background()
+
 	for {
-		resp, err := client.Chat.Completions.New(context.Background(),
+		resp, err := client.Chat.Completions.New(ctx,
 			openai.ChatCompletionNewParams{
 				Model:    "anthropic/claude-haiku-4.5",
 				Messages: messages,
@@ -81,7 +83,7 @@ func main() {
 		messages = append(messages, msg.ToParam())
 		if len(msg.ToolCalls) > 0 {
 			for _, tc := range msg.ToolCalls {
-				data, err := tools.Execute(tc.Function.Name, tc.Function.Arguments)
+				data, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					os.Exit(1)
