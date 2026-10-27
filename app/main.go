@@ -12,6 +12,7 @@ import (
 	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
+//nolint:gochecknoglobals // injectable exit hook for testing main
 var exitFunc = os.Exit
 
 type mainArgs struct {
@@ -62,20 +63,18 @@ func main() {
 		messages = append(messages, msg.ToParam())
 
 		if len(msg.ToolCalls) == 0 {
-			fmt.Print(msg.Content)
+			_, _ = os.Stdout.WriteString(msg.Content)
 			break
 		}
 
 		for _, tc := range msg.ToolCalls {
-			data, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			data, execErr := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			if execErr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", execErr)
 				exitFunc(1)
 				return
 			}
 			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
 		}
-
 	}
-
 }

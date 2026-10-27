@@ -38,8 +38,14 @@ Run the tests.
 `
 
 func TestReadSkills(t *testing.T) {
-	apple := chat.Skill{Name: "apple", Description: "Deploys the apple service to production."}
-	grape := chat.Skill{Name: "grape", Description: "Runs the grape test suite and reports failures."}
+	apple := chat.Skill{
+		Name:        "apple",
+		Description: "Deploys the apple service to production.",
+	}
+	grape := chat.Skill{
+		Name:        "grape",
+		Description: "Runs the grape test suite and reports failures.",
+	}
 
 	tests := []struct {
 		name  string

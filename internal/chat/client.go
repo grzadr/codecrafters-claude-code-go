@@ -3,9 +3,11 @@ package chat
 import (
 	"bytes"
 	"cmp"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -18,9 +20,9 @@ func NewOpenAiClient() openai.Client {
 		panic("Env variable OPENROUTER_API_KEY not found")
 	}
 
-	baseUrl := cmp.Or(os.Getenv("OPENROUTER_BASE_URL"), "https://openrouter.ai/api/v1")
+	baseURL := cmp.Or(os.Getenv("OPENROUTER_BASE_URL"), "https://openrouter.ai/api/v1")
 
-	return openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
+	return openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
 }
 
 type Skill struct {
@@ -28,24 +30,26 @@ type Skill struct {
 	Description string `yaml:"description"`
 }
 
-var skillHeaderSeparator = []byte("---\n")
+const skillHeaderSeparator = "---\n"
 
-func newSkill(content []byte) (s Skill, err error) {
-	content, found := bytes.CutPrefix(content, skillHeaderSeparator)
-
+func newSkill(content []byte) (Skill, error) {
+	sep := []byte(skillHeaderSeparator)
+	content, found := bytes.CutPrefix(content, sep)
 	if !found {
-		err = fmt.Errorf("skill description not prefixed with `---\n`")
-		return
+		return Skill{}, errors.New("skill description not prefixed with `---\n`")
 	}
-	header, _, found := bytes.Cut(content, skillHeaderSeparator)
 
+	header, _, found := bytes.Cut(content, sep)
 	if !found {
-		err = fmt.Errorf("skill description never closed")
-		return
+		return Skill{}, errors.New("skill description never closed")
 	}
-	err = yaml.Unmarshal([]byte(header), &s)
 
-	return
+	var s Skill
+	if err := yaml.Unmarshal(header, &s); err != nil {
+		return Skill{}, err
+	}
+
+	return s, nil
 }
 
 func readSkills(path string) []Skill {
@@ -66,19 +70,17 @@ func readSkills(path string) []Skill {
 			continue
 		}
 
-		skill_path := filepath.Join(path, entry.Name(), "SKILL.md")
+		skillPath := filepath.Join(path, entry.Name(), "SKILL.md")
 
-		content, err := os.ReadFile(skill_path)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error reading skill %s: %v\n", skill_path, err)
+		content, readErr := os.ReadFile(skillPath)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "error reading skill %s: %v\n", skillPath, readErr)
 			continue
 		}
 
-		skill, err := newSkill(content)
-
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", skill_path, err)
+		skill, parseErr := newSkill(content)
+		if parseErr != nil {
+			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", skillPath, parseErr)
 			continue
 		}
 
@@ -91,18 +93,19 @@ func readSkills(path string) []Skill {
 const skillsPath = ".claude/skills"
 
 func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
-	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 8)
+	var messages []openai.ChatCompletionMessageParamUnion
 
 	skills := readSkills(skillsPath)
 
 	if len(skills) > 0 {
-		system_msg := "You have access to the following skills:\n\n"
+		var systemMsg strings.Builder
+		systemMsg.WriteString("You have access to the following skills:\n\n")
 
 		for _, skill := range skills {
-			system_msg = fmt.Sprintf("%s- %s: %s\n", system_msg, skill.Name, skill.Description)
+			fmt.Fprintf(&systemMsg, "- %s: %s\n", skill.Name, skill.Description)
 		}
 
-		messages = append(messages, openai.SystemMessage(system_msg))
+		messages = append(messages, openai.SystemMessage(systemMsg.String()))
 	}
 
 	messages = append(messages, openai.UserMessage(prompt))

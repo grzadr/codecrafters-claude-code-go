@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strings"
 	"syscall"
 	"time"
 
@@ -58,20 +57,28 @@ func (t Tool) ToParam() openai.ChatCompletionToolUnionParam {
 	})
 }
 
+const (
+	toolTypeFunction = "function"
+	paramTypeObject  = "object"
+	propTypeString   = "string"
+	propFilePath     = "file_path"
+)
+
+//nolint:gochecknoglobals // static Read tool definition
 var ReadTool = Tool{
-	Type: "function",
+	Type: toolTypeFunction,
 	Function: Function{
 		Name:        "Read",
 		Description: "Read and return the contents of a file",
 		Parameters: Parameter{
-			Type: "object",
+			Type: paramTypeObject,
 			Properties: map[string]Property{
-				"file_path": {
-					Type:        "string",
+				propFilePath: {
+					Type:        propTypeString,
 					Description: "The path to the file to read",
 				},
 			},
-			Required: []string{"file_path"},
+			Required: []string{propFilePath},
 		},
 	},
 }
@@ -89,30 +96,31 @@ func ReadFunc(_ context.Context, rawArgs string) ([]byte, error) {
 	return os.ReadFile(args.FilePath)
 }
 
+//nolint:gochecknoglobals // static Write tool definition
 var WriteTool = Tool{
-	Type: "function",
+	Type: toolTypeFunction,
 	Function: Function{
 		Name:        "Write",
 		Description: "Write content to a file",
 		Parameters: Parameter{
-			Type: "object",
+			Type: paramTypeObject,
 			Properties: map[string]Property{
-				"file_path": {
-					Type:        "string",
+				propFilePath: {
+					Type:        propTypeString,
 					Description: "The path of the file to write to",
 				},
 				"content": {
-					Type:        "string",
+					Type:        propTypeString,
 					Description: "The content to write to the file",
 				},
 			},
-			Required: []string{"file_path", "content"},
+			Required: []string{propFilePath, "content"},
 		},
 	},
 }
 
-func WriteStringToFile(filepath, content string) error {
-	return os.WriteFile(filepath, []byte(content), 0644)
+func WriteStringToFile(filePath, content string) error {
+	return os.WriteFile(filePath, []byte(content), 0o600)
 }
 
 type WriteArgs struct {
@@ -129,16 +137,17 @@ func WriteFunc(_ context.Context, rawArgs string) ([]byte, error) {
 	return nil, WriteStringToFile(args.FilePath, args.Content)
 }
 
+//nolint:gochecknoglobals // static Bash tool definition
 var BashTool = Tool{
-	Type: "function",
+	Type: toolTypeFunction,
 	Function: Function{
 		Name:        "Bash",
 		Description: "Execute a shell command",
 		Parameters: Parameter{
-			Type: "object",
+			Type: paramTypeObject,
 			Properties: map[string]Property{
 				"command": {
-					Type:        "string",
+					Type:        propTypeString,
 					Description: "The command to execute",
 				},
 			},
@@ -160,16 +169,12 @@ func (e *ProcessError) Unwrap() error {
 	return e.Err
 }
 
-type commandResult struct {
-	output []byte
-	err    error
-}
-
 func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) ([]byte, error) {
 	if len(args) == 0 {
 		return nil, errors.New("command arguments slice cannot be empty")
 	}
 
+	//nolint:gosec // G204: Bash tool intentionally executes user/LLM-provided commands
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 
 	// Send SIGTERM on context cancellation instead of the default SIGKILL.
@@ -180,41 +185,28 @@ func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) (
 	// Maximum time to wait after SIGTERM before escalating to SIGKILL.
 	cmd.WaitDelay = gracePeriod
 
-	resCh := make(chan commandResult, 1)
-
-	go func() {
-		out, err := cmd.CombinedOutput()
-		resCh <- commandResult{
-			output: out,
-			err:    err,
-		}
-	}()
-
-	// Blocks until the command and its I/O pipes have fully closed,
-	// ensuring all buffers are drained even after cancellation.
-	res := <-resCh
-
-	if res.err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		code := -1
 
-		if exitErr, ok := errors.AsType[*exec.ExitError](res.err); ok {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			code = exitErr.ExitCode()
 		}
 
-		return res.output, &ProcessError{
+		return out, &ProcessError{
 			Code: code,
-			Err:  res.err,
+			Err:  err,
 		}
 	}
 
-	return res.output, nil
+	return out, nil
 }
 
 type BashArgs struct {
 	Command string `json:"command"`
 }
 
-const BASH_DURATION = 100
+const bashGracePeriod = 100 * time.Second
 
 func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 	var args BashArgs
@@ -222,16 +214,17 @@ func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 		return nil, err
 	}
 
-	return runCommand(ctx, strings.Fields(args.Command), time.Second*time.Duration(BASH_DURATION))
+	return runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
 }
 
+//nolint:gochecknoglobals // registry maps tool names to handlers
 var ToolsRegistry = map[string]func(ctx context.Context, rawArgs string) ([]byte, error){
 	"Read":  ReadFunc,
 	"Write": WriteFunc,
 	"Bash":  BashFunc,
 }
 
-func Execute(ctx context.Context, name string, rawArgs string) ([]byte, error) {
+func Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
 	fn, ok := ToolsRegistry[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", name)
@@ -240,6 +233,7 @@ func Execute(ctx context.Context, name string, rawArgs string) ([]byte, error) {
 	return fn(ctx, rawArgs)
 }
 
+//nolint:gochecknoglobals // precomputed OpenAI tool parameter list
 var ToolsList = []openai.ChatCompletionToolUnionParam{
 	ReadTool.ToParam(),
 	WriteTool.ToParam(),

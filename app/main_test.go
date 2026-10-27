@@ -26,6 +26,7 @@ func TestNewMainArgs(t *testing.T) {
 	newMainArgs(nil)
 }
 
+//nolint:reassign // test overrides os.Args and http.DefaultTransport
 func TestMainFunc(t *testing.T) {
 	origArgs := os.Args
 	origExit := exitFunc
@@ -39,19 +40,28 @@ func TestMainFunc(t *testing.T) {
 	t.Setenv("OPENROUTER_API_KEY", "test")
 
 	var step int
-	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	http.DefaultTransport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
 		rec := httptest.NewRecorder()
 		rec.Header().Set("Content-Type", "application/json")
 		step++
 		switch step {
 		case 1:
-			_, _ = fmt.Fprint(rec, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"true\"}"}}]}}]}`)
+			_, _ = fmt.Fprint(
+				rec,
+				`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"true\"}"}}]}}]}`,
+			)
 		case 2:
-			_, _ = fmt.Fprint(rec, `{"choices":[{"message":{"role":"assistant","content":"done"}}]}`)
+			_, _ = fmt.Fprint(
+				rec,
+				`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`,
+			)
 		case 3:
 			rec.WriteHeader(http.StatusBadRequest)
 		case 4:
-			_, _ = fmt.Fprint(rec, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Unknown","arguments":"{}"}}]}}]}`)
+			_, _ = fmt.Fprint(
+				rec,
+				`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Unknown","arguments":"{}"}}]}}]}`,
+			)
 		case 5:
 			_, _ = fmt.Fprint(rec, `{"choices":[]}`)
 		}

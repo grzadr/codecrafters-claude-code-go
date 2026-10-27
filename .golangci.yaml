@@ -21,7 +21,9 @@ formatters:
       shorten-comments: true
       reformat-tags: false
     gofumpt:
-      extra-rules: true
+      extra:
+        group-params: true
+        clothe-returns: true
 
 linters:
   default: none
@@ -151,7 +153,8 @@ linters:
     exhaustive:
       check:
         - switch
-        - map
+        - mapliteral
+        - typeswitch
 
     exhaustruct:
       exclude:
@@ -265,18 +268,10 @@ linters:
       - std-error-handling
       - common-false-positives
     rules:
-      - source: "TODO"
-        linters: [godot]
       - text: "should have a package comment"
         linters: [revive]
       - text: 'exported \S+ \S+ should have comment( \(or a comment on this block\))? or be unexported'
         linters: [revive]
-      - text: 'package comment should be of the form ".+"'
-        source: "// ?(nolint|TODO)"
-        linters: [revive]
-      - text: 'comment on exported \S+ \S+ should be of the form ".+"'
-        source: "// ?(nolint|TODO)"
-        linters: [revive, staticcheck]
       - path: '_test\.go'
         linters:
           - bodyclose

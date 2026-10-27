@@ -1,4 +1,6 @@
 package chat
 
 // ReadSkills exports the unexported readSkills function for testing.
-var ReadSkills = readSkills
+func ReadSkills(path string) []Skill {
+	return readSkills(path)
+}
