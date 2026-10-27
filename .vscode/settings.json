@@ -1,0 +1,56 @@
+{
+    // General Editor Settings
+    "editor.rulers": [
+        100
+    ],
+    "editor.formatOnType": false,
+    "editor.formatOnPaste": false,
+    "editor.codeActions.triggerOnFocusChange": true,
+    // Global Code Actions (Non-Go tools like ESLint / Assembly remain active)
+    "editor.codeActionsOnSave": {
+        "source.fixAll": "always",
+        "source.fixAll.eslint": "always",
+        "source.assembly": "always"
+    },
+    // File Management
+    "files.trimTrailingWhitespace": true,
+    "files.insertFinalNewline": true,
+    "files.autoSave": "onFocusChange",
+    "files.autoSaveDelay": 100,
+    "files.associations": {
+        ".env": "shellscript",
+        "*.sh": "shellscript",
+        ".secrets": "shellscript"
+    },
+    // Go Language Scoped Overrides
+    "[go]": {
+        "editor.defaultFormatter": "golang.go",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+            "source.organizeImports": "always"
+        }
+    },
+    // Go Tooling & Formatting via golangci-lint
+    "go.formatTool": "custom",
+    "go.alternateTools": {
+        "customFormatter": "golangci-lint"
+    },
+    "go.formatFlags": [
+        "fmt",
+        "--stdin"
+    ],
+    // Whole-Codebase Linting & Vulnerability Scanning on Save/Focus Change
+    "go.lintTool": "golangci-lint",
+    "go.lintOnSave": "workspace",
+    "go.lintFlags": [
+        "--path-mode=abs",
+        "--fast-only"
+    ],
+    // Language Server Tuning
+    "go.useLanguageServer": true,
+    "gopls": {
+        "ui.diagnostic.staticcheck": false,
+        "usePlaceholders": true
+    },
+    "go.toolsManagement.autoUpdate": true,
+}
