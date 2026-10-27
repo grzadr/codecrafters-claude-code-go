@@ -102,7 +102,7 @@ func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
 		system_msg := "You have access to the following skills:\n\n"
 
 		for _, skill := range skills {
-			system_msg = fmt.Sprintf("- %s: %s\n", skill.Name, skill.Description)
+			system_msg = fmt.Sprintf("%s- %s: %s\n", system_msg, skill.Name, skill.Description)
 		}
 
 		messages = append(messages, openai.SystemMessage(system_msg))

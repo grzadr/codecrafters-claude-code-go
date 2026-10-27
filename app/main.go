@@ -37,8 +37,6 @@ func main() {
 
 	messages := chat.BuildMessages(args.Prompt)
 
-	fmt.Fprintf(os.Stderr, "messages: %+v\n", messages)
-
 	ctx := context.Background()
 
 	for {
