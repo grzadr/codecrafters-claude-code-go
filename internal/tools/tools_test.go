@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	tools "github.com/codecrafters-io/claude-code-starter-go/internal"
+	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
 func TestExecute_Read(t *testing.T) {

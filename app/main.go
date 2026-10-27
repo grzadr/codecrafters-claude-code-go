@@ -7,9 +7,9 @@ import (
 	"os"
 
 	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/option"
 
-	tools "github.com/codecrafters-io/claude-code-starter-go/internal"
+	client "github.com/codecrafters-io/claude-code-starter-go/internal/openai"
+	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
 type mainArgs struct {
@@ -30,33 +30,13 @@ func newMainArgs(args []string) mainArgs {
 	return parsed
 }
 
-func newOpenAiClient() openai.Client {
-	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	baseUrl := os.Getenv("OPENROUTER_BASE_URL")
-	if baseUrl == "" {
-		baseUrl = "https://openrouter.ai/api/v1"
-	}
-
-	if apiKey == "" {
-		panic("Env variable OPENROUTER_API_KEY not found")
-	}
-
-	return openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
-}
-
 func main() {
 	args := newMainArgs(os.Args[1:])
 
-	client := newOpenAiClient()
-	messages := []openai.ChatCompletionMessageParamUnion{
-		{
-			OfUser: &openai.ChatCompletionUserMessageParam{
-				Content: openai.ChatCompletionUserMessageParamContentUnion{
-					OfString: openai.String(args.Prompt),
-				},
-			},
-		},
-	}
+	client := client.NewOpenAiClient()
+
+	messages := make([]openai.ChatCompletionMessageParamUnion, 8)
+	messages = append(messages, openai.UserMessage(args.Prompt))
 
 	ctx := context.Background()
 
@@ -88,16 +68,7 @@ func main() {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
 					os.Exit(1)
 				}
-
-				messages = append(messages, openai.ChatCompletionMessageParamUnion{
-					OfTool: &openai.ChatCompletionToolMessageParam{
-						ToolCallID: tc.ID,
-						Role:       "tool",
-						Content: openai.ChatCompletionToolMessageParamContentUnion{
-							OfString: openai.String(string(data)),
-						},
-					}})
-
+				messages = append(messages, openai.ToolMessage(string(data), tc.ID))
 			}
 
 		} else {
