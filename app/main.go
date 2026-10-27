@@ -8,7 +8,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 
-	client "github.com/codecrafters-io/claude-code-starter-go/internal/openai"
+	chat "github.com/codecrafters-io/claude-code-starter-go/internal/chat"
 	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
@@ -33,10 +33,9 @@ func newMainArgs(args []string) mainArgs {
 func main() {
 	args := newMainArgs(os.Args[1:])
 
-	client := client.NewOpenAiClient()
+	client := chat.NewOpenAiClient()
 
-	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 8)
-	messages = append(messages, openai.UserMessage(args.Prompt))
+	messages := chat.BuildMessages(args.Prompt)
 
 	ctx := context.Background()
 
