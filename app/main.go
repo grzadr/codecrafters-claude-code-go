@@ -35,7 +35,7 @@ func main() {
 
 	client := client.NewOpenAiClient()
 
-	messages := make([]openai.ChatCompletionMessageParamUnion, 8)
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, 8)
 	messages = append(messages, openai.UserMessage(args.Prompt))
 
 	ctx := context.Background()
