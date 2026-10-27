@@ -76,10 +76,6 @@ var ReadTool = Tool{
 	},
 }
 
-func readFile(filename string) ([]byte, error) {
-	return os.ReadFile(filename)
-}
-
 type ReadArgs struct {
 	FilePath string `json:"file_path"`
 }
@@ -90,7 +86,7 @@ func ReadFunc(_ context.Context, rawArgs string) ([]byte, error) {
 		return nil, err
 	}
 
-	return readFile(args.FilePath)
+	return os.ReadFile(args.FilePath)
 }
 
 var WriteTool = Tool{
@@ -130,11 +126,7 @@ func WriteFunc(_ context.Context, rawArgs string) ([]byte, error) {
 		return nil, err
 	}
 
-	if err := WriteStringToFile(args.FilePath, args.Content); err != nil {
-		return nil, err
-	}
-
-	return nil, nil
+	return nil, WriteStringToFile(args.FilePath, args.Content)
 }
 
 var BashTool = Tool{
@@ -203,9 +195,9 @@ func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) (
 	res := <-resCh
 
 	if res.err != nil {
-		var exitErr *exec.ExitError
 		code := -1
-		if errors.As(res.err, &exitErr) {
+
+		if exitErr, ok := errors.AsType[*exec.ExitError](res.err); ok {
 			code = exitErr.ExitCode()
 		}
 
@@ -222,10 +214,6 @@ type BashArgs struct {
 	Command string `json:"command"`
 }
 
-func (a BashArgs) Split() []string {
-	return strings.Split(a.Command, " ")
-}
-
 const BASH_DURATION = 100
 
 func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
@@ -234,7 +222,7 @@ func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 		return nil, err
 	}
 
-	return runCommand(ctx, args.Split(), time.Second*time.Duration(BASH_DURATION))
+	return runCommand(ctx, strings.Fields(args.Command), time.Second*time.Duration(BASH_DURATION))
 }
 
 var ToolsRegistry = map[string]func(ctx context.Context, rawArgs string) ([]byte, error){

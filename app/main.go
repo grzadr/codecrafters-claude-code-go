@@ -58,27 +58,24 @@ func main() {
 			panic("No choices in response")
 		}
 
-		// // You can use print statements as follows for debugging, they'll be visible when running tests.
-		// fmt.Fprintln(os.Stderr, "Logs from your program will appear here!")
-
 		msg := resp.Choices[0].Message
 		messages = append(messages, msg.ToParam())
-		if len(msg.ToolCalls) > 0 {
-			for _, tc := range msg.ToolCalls {
-				data, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-					exitFunc(1)
-					return
-				}
-				messages = append(messages, openai.ToolMessage(string(data), tc.ID))
-			}
 
-		} else {
+		if len(msg.ToolCalls) == 0 {
+			fmt.Print(msg.Content)
 			break
 		}
-	}
 
-	fmt.Print(messages[len(messages)-1].OfAssistant.Content.OfString.Value)
+		for _, tc := range msg.ToolCalls {
+			data, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				exitFunc(1)
+				return
+			}
+			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
+		}
+
+	}
 
 }

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -427,39 +426,39 @@ func TestBashFunc(t *testing.T) {
 	})
 }
 
-func TestBashArgs_Split(t *testing.T) {
-	tests := []struct {
-		name     string
-		command  string
-		expected []string
-	}{
-		{
-			name:     "single word",
-			command:  "ls",
-			expected: []string{"ls"},
-		},
-		{
-			name:     "command with arguments",
-			command:  "echo hello world",
-			expected: []string{"echo", "hello", "world"},
-		},
-		{
-			name:     "empty command",
-			command:  "",
-			expected: []string{""},
-		},
-	}
+// func TestBashArgs_Split(t *testing.T) {
+// 	tests := []struct {
+// 		name     string
+// 		command  string
+// 		expected []string
+// 	}{
+// 		{
+// 			name:     "single word",
+// 			command:  "ls",
+// 			expected: []string{"ls"},
+// 		},
+// 		{
+// 			name:     "command with arguments",
+// 			command:  "echo hello world",
+// 			expected: []string{"echo", "hello", "world"},
+// 		},
+// 		{
+// 			name:     "empty command",
+// 			command:  "",
+// 			expected: []string{""},
+// 		},
+// 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			args := tools.BashArgs{Command: tc.command}
-			got := args.Split()
-			if !slices.Equal(got, tc.expected) {
-				t.Errorf("expected %v, got %v", tc.expected, got)
-			}
-		})
-	}
-}
+// 	for _, tc := range tests {
+// 		t.Run(tc.name, func(t *testing.T) {
+// 			args := tools.BashArgs{Command: tc.command}
+// 			got := args.Split()
+// 			if !slices.Equal(got, tc.expected) {
+// 				t.Errorf("expected %v, got %v", tc.expected, got)
+// 			}
+// 		})
+// 	}
+// }
 
 func TestProcessError(t *testing.T) {
 	baseErr := errors.New("underlying command error")

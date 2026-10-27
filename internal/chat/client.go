@@ -2,6 +2,7 @@ package chat
 
 import (
 	"bytes"
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,14 +14,11 @@ import (
 
 func NewOpenAiClient() openai.Client {
 	apiKey := os.Getenv("OPENROUTER_API_KEY")
-	baseUrl := os.Getenv("OPENROUTER_BASE_URL")
-	if baseUrl == "" {
-		baseUrl = "https://openrouter.ai/api/v1"
-	}
-
 	if apiKey == "" {
 		panic("Env variable OPENROUTER_API_KEY not found")
 	}
+
+	baseUrl := cmp.Or(os.Getenv("OPENROUTER_BASE_URL"), "https://openrouter.ai/api/v1")
 
 	return openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseUrl))
 }
@@ -28,7 +26,6 @@ func NewOpenAiClient() openai.Client {
 type Skill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
-	// Content     []byte
 }
 
 var skillHeaderSeparator = []byte("---\n")
