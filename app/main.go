@@ -12,6 +12,8 @@ import (
 	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
+var exitFunc = os.Exit
+
 type mainArgs struct {
 	Prompt string
 }
@@ -49,7 +51,8 @@ func main() {
 		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			exitFunc(1)
+			return
 		}
 		if len(resp.Choices) == 0 {
 			panic("No choices in response")
@@ -65,7 +68,8 @@ func main() {
 				data, err := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-					os.Exit(1)
+					exitFunc(1)
+					return
 				}
 				messages = append(messages, openai.ToolMessage(string(data), tc.ID))
 			}

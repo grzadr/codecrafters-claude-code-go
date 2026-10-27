@@ -151,3 +151,44 @@ func TestReadSkills_MissingDir(t *testing.T) {
 		t.Errorf("expected no skills for missing dir, got %+v", got)
 	}
 }
+
+func TestNewOpenAiClient(t *testing.T) {
+	t.Run("missing api key panics", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "")
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic")
+			}
+		}()
+		chat.NewOpenAiClient()
+	})
+
+	t.Run("default and custom base url", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test-key")
+		t.Setenv("OPENROUTER_BASE_URL", "")
+		_ = chat.NewOpenAiClient()
+
+		t.Setenv("OPENROUTER_BASE_URL", "http://localhost:8080")
+		_ = chat.NewOpenAiClient()
+	})
+}
+
+func TestBuildMessages(t *testing.T) {
+	t.Run("without skills", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+		msgs := chat.BuildMessages("hello")
+		if len(msgs) != 1 {
+			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+	})
+
+	t.Run("with skills", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, ".claude/skills/apple/SKILL.md", appleSkill)
+		t.Chdir(dir)
+		msgs := chat.BuildMessages("hello")
+		if len(msgs) != 2 {
+			t.Fatalf("got %d messages, want 2", len(msgs))
+		}
+	})
+}
