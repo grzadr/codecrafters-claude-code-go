@@ -57,7 +57,9 @@ func newSkill(content []byte) (Skill, error) {
 	return s, nil
 }
 
-func readSkills(path string) []Skill {
+type SkillRegistry map[string]Skill
+
+func readSkills(path string) SkillRegistry {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -71,7 +73,7 @@ func readSkills(path string) []Skill {
 		return nil
 	}
 
-	skills := make([]Skill, 0, len(entries))
+	skills := make(SkillRegistry)
 
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -92,36 +94,53 @@ func readSkills(path string) []Skill {
 			continue
 		}
 
-		skills = append(skills, skill)
+		skills[skill.Name] = skill
 	}
 
 	return skills
 }
 
-const skillsPath = ".claude/skills"
+const (
+	skillsPath  = ".claude/skills"
+	skillPrefix = "/"
+)
 
 var argumentRegExp = regexp.MustCompile(`\$(?:ARGUMENTS\b(?:\[(\d+)\])?|(\d+))`)
 
-func parsePrompt(prompt string, skills []Skill) string {
-	if !strings.HasPrefix(prompt, "/") || len(prompt) == 1 {
-		return prompt
-	}
-
-	cleared := strings.Fields(prompt[1:])
-	if len(cleared) == 0 {
-		return ""
-	}
-
-	skillName := cleared[0]
-	args := cleared[1:]
-
-	for _, s := range skills {
-		if s.Name != skillName {
-			continue
+func getSkillNames(prompt string, skills SkillRegistry) ([]Skill, []string) {
+	fields := strings.Fields(prompt)
+	last := 0
+	found := make([]Skill, 0, len(fields))
+	for l, f := range fields {
+		if !strings.HasPrefix(f, skillPrefix) || len(f) == 1 {
+			break
 		}
+		skill, ok := skills[f[1:]]
+		if !ok {
+			break
+		}
+		found = append(found, skill)
+		last = l + 1
+	}
+
+	args := fields[last:]
+
+	return found, args
+}
+
+func parsePrompt(prompt string, skills SkillRegistry) []string {
+	namesSkills, args := getSkillNames(prompt, skills)
+
+	if len(namesSkills) == 0 {
+		return []string{prompt}
+	}
+
+	userPrompts := make([]string, 0, len(namesSkills))
+
+	for _, s := range namesSkills {
 		body := strings.TrimSpace(string(s.Body))
 
-		return argumentRegExp.ReplaceAllStringFunc(body, func(m string) string {
+		out := argumentRegExp.ReplaceAllStringFunc(body, func(m string) string {
 			sub := argumentRegExp.FindStringSubmatch(m)
 
 			snum := sub[1] + sub[2]
@@ -138,9 +157,11 @@ func parsePrompt(prompt string, skills []Skill) string {
 
 			return args[num]
 		})
+
+		userPrompts = append(userPrompts, out)
 	}
 
-	return prompt
+	return userPrompts
 }
 
 func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
@@ -159,7 +180,9 @@ func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
 		messages = append(messages, openai.SystemMessage(systemMsg.String()))
 	}
 
-	messages = append(messages, openai.UserMessage(parsePrompt(prompt, skills)))
+	for _, m := range parsePrompt(prompt, skills) {
+		messages = append(messages, openai.UserMessage(m))
+	}
 
 	return messages
 }

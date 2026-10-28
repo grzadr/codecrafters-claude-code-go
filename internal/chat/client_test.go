@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"bytes"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -67,7 +68,7 @@ func TestReadSkills(t *testing.T) {
 			want:  []chat.Skill{apple},
 		},
 		{
-			name: "multiple skills sorted by folder name",
+			name: "multiple skills keyed by name",
 			files: map[string]string{
 				"grape/SKILL.md": grapeSkill,
 				"apple/SKILL.md": appleSkill,
@@ -160,8 +161,13 @@ description: "Deploys: the apple service"
 				writeFile(t, dir, rel, content)
 			}
 
+			want := chat.SkillRegistry{}
+			for _, s := range tt.want {
+				want[s.Name] = s
+			}
+
 			got := chat.ReadSkills(dir)
-			if !slices.EqualFunc(got, tt.want, skillEqual) {
+			if !maps.EqualFunc(got, want, skillEqual) {
 				t.Errorf("ReadSkills() = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -365,26 +371,26 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 }
 
 func TestParsePrompt(t *testing.T) {
-	skills := []chat.Skill{
-		{Name: "all", Body: []byte("\n  $ARGUMENTS  \n")},
-		{Name: "pos", Body: []byte("$1 $0")},
-		{Name: "idx", Body: []byte("$ARGUMENTS[1] $ARGUMENTS[0]")},
-		{Name: "mix", Body: []byte("$0|$ARGUMENTS[1]|$ARGUMENTS|$0")},
-		{Name: "far", Body: []byte("[$2][$ARGUMENTS[5]][$99999999999999999999]")},
-		{Name: "ten", Body: []byte("$10")},
-		{Name: "lit", Body: []byte("$ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $x $")},
-		{Name: "plain", Body: []byte("no placeholders")},
+	skills := chat.SkillRegistry{
+		"all":   {Name: "all", Body: []byte("\n  $ARGUMENTS  \n")},
+		"pos":   {Name: "pos", Body: []byte("$1 $0")},
+		"idx":   {Name: "idx", Body: []byte("$ARGUMENTS[1] $ARGUMENTS[0]")},
+		"mix":   {Name: "mix", Body: []byte("$0|$ARGUMENTS[1]|$ARGUMENTS|$0")},
+		"far":   {Name: "far", Body: []byte("[$2][$ARGUMENTS[5]][$99999999999999999999]")},
+		"ten":   {Name: "ten", Body: []byte("$10")},
+		"lit":   {Name: "lit", Body: []byte("$ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $x $")},
+		"plain": {Name: "plain", Body: []byte("no placeholders")},
 	}
 
 	tests := []struct {
 		name   string
 		prompt string
-		want   string
+		want   string // the single expected user prompt
 	}{
 		{name: "not a slash command", prompt: "all 1 2", want: "all 1 2"},
 		{name: "unknown skill returns prompt", prompt: "/nope a b", want: "/nope a b"},
 		{name: "bare slash", prompt: "/", want: "/"},
-		{name: "slash with only whitespace", prompt: "/ \t ", want: ""},
+		{name: "slash with only whitespace", prompt: "/ \t ", want: "/ \t "},
 		{name: "full arguments with trimmed body", prompt: "/all 4127", want: "4127"},
 		{name: "arguments whitespace collapsed", prompt: "/all  a\t b  ", want: "a b"},
 		{name: "shorthand positional", prompt: "/pos mango pear", want: "pear mango"},
@@ -408,8 +414,8 @@ func TestParsePrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := chat.ParsePrompt(tt.prompt, skills); got != tt.want {
-				t.Errorf("ParsePrompt(%q) = %q, want %q", tt.prompt, got, tt.want)
+			if got := chat.ParsePrompt(tt.prompt, skills); !slices.Equal(got, []string{tt.want}) {
+				t.Errorf("ParsePrompt(%q) = %q, want [%q]", tt.prompt, got, tt.want)
 			}
 		})
 	}
@@ -422,5 +428,125 @@ func TestReadSkills_PathIsFile(t *testing.T) {
 	got := chat.ReadSkills(filepath.Join(dir, "skills"))
 	if len(got) != 0 {
 		t.Errorf("expected no skills when path is a file, got %+v", got)
+	}
+}
+
+const stackAppleSkill = `---
+name: apple
+description: Reports the deploy target for the apple service.
+---
+
+Add this exact line to your response: blueberry-$ARGUMENTS
+`
+
+const stackGrapeSkill = `---
+name: grape
+description: Summarizes recent incidents for the payments team.
+---
+
+Add this exact line to your response: cherry-$ARGUMENTS
+`
+
+const stackMangoSkill = `---
+name: mango
+description: Echoes the first two arguments in reverse.
+---
+
+kiwi-$1-$0
+`
+
+func TestBuildMessages_StackedSkills(t *testing.T) {
+	const (
+		apple = "Add this exact line to your response: blueberry-"
+		grape = "Add this exact line to your response: cherry-"
+	)
+
+	tests := []struct {
+		name   string
+		prompt string
+		want   []string // expected user messages, in order
+	}{
+		{
+			name:   "two skills share trailing argument",
+			prompt: "/apple /grape 4127",
+			want:   []string{apple + "4127", grape + "4127"},
+		},
+		{
+			name:   "order follows the prompt",
+			prompt: "/grape /apple 4127",
+			want:   []string{grape + "4127", apple + "4127"},
+		},
+		{
+			name:   "non-skill token ends expansion",
+			prompt: "/apple 4127 /grape",
+			want:   []string{apple + "4127 /grape"},
+		},
+		{
+			name:   "unknown skill ends expansion and stays in arguments",
+			prompt: "/apple /pear 4127",
+			want:   []string{apple + "/pear 4127"},
+		},
+		{
+			name:   "skill name without slash ends expansion",
+			prompt: "/apple grape 4127",
+			want:   []string{apple + "grape 4127"},
+		},
+		{
+			name:   "bare slash ends expansion",
+			prompt: "/apple / 4127",
+			want:   []string{apple + "/ 4127"},
+		},
+		{
+			name:   "stacked skills without arguments",
+			prompt: "/apple /grape",
+			want:   []string{apple, grape},
+		},
+		{
+			name:   "three skills with positional placeholders",
+			prompt: "/apple /grape /mango a b",
+			want:   []string{apple + "a b", grape + "a b", "kiwi-b-a"},
+		},
+		{
+			name:   "repeated skill is expanded twice",
+			prompt: "/apple /apple 1",
+			want:   []string{apple + "1", apple + "1"},
+		},
+		{
+			name:   "whitespace between stacked skills collapsed",
+			prompt: "/apple \t /grape   x  y",
+			want:   []string{apple + "x y", grape + "x y"},
+		},
+		{
+			name:   "unknown first skill sends raw prompt",
+			prompt: "/pear /apple 1",
+			want:   []string{"/pear /apple 1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, ".claude/skills/apple/SKILL.md", stackAppleSkill)
+			writeFile(t, dir, ".claude/skills/grape/SKILL.md", stackGrapeSkill)
+			writeFile(t, dir, ".claude/skills/mango/SKILL.md", stackMangoSkill)
+			t.Chdir(dir)
+
+			msgs := chat.BuildMessages(tt.prompt)
+			if len(msgs) == 0 || msgs[0].OfSystem == nil {
+				t.Fatalf("first message is not the system message: %+v", msgs)
+			}
+
+			var got []string
+			for _, m := range msgs[1:] {
+				if m.OfUser == nil {
+					t.Fatalf("non-user message after system message: %+v", m)
+				}
+				got = append(got, m.OfUser.Content.OfString.Value)
+			}
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("user messages = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
