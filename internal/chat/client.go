@@ -106,6 +106,11 @@ func BuildMessages(
 			fmt.Fprintf(&systemMsg, "- %s: %s\n", skill.Name, skill.Description)
 		}
 
+		fmt.Fprint(
+			&systemMsg,
+			"If a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.",
+		)
+
 		messages = append(messages, openai.SystemMessage(systemMsg.String()))
 	}
 
