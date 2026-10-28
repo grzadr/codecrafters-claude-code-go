@@ -414,3 +414,13 @@ func TestParsePrompt(t *testing.T) {
 		})
 	}
 }
+
+func TestReadSkills_PathIsFile(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "skills", "not a dir")
+
+	got := chat.ReadSkills(filepath.Join(dir, "skills"))
+	if len(got) != 0 {
+		t.Errorf("expected no skills when path is a file, got %+v", got)
+	}
+}

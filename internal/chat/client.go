@@ -60,7 +60,10 @@ func newSkill(content []byte) (Skill, error) {
 func readSkills(path string) []Skill {
 	entries, err := os.ReadDir(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error reading skills %s: %v\n", path, err)
+		if !errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(os.Stderr, "error reading skills %s: %v\n", path, err)
+		}
+
 		return nil
 	}
 
