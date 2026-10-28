@@ -94,9 +94,9 @@ func readSkills(path string) SkillRegistry {
 			continue
 		}
 
-		skillPath := filepath.Join(path, entry.Name())
+		// skillPath := filepath.Join(path, entry.Name())
 
-		mdPath := filepath.Join(skillPath, "SKILL.md")
+		mdPath := filepath.Join(path, entry.Name(), "SKILL.md")
 
 		content, readErr := os.ReadFile(mdPath)
 		if readErr != nil {
@@ -104,7 +104,7 @@ func readSkills(path string) SkillRegistry {
 			continue
 		}
 
-		skill, parseErr := newSkill(skillPath, content)
+		skill, parseErr := newSkill(filepath.Join(path, entry.Name()), content)
 		if parseErr != nil {
 			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", mdPath, parseErr)
 			continue
