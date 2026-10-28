@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -95,14 +97,44 @@ func readSkills(path string) []Skill {
 
 const skillsPath = ".claude/skills"
 
+var argumentRegExp = regexp.MustCompile(`\$(?:ARGUMENTS\b(?:\[(\d+)\])?|(\d+))`)
+
 func parsePrompt(prompt string, skills []Skill) string {
-	if strings.HasPrefix(prompt, "/") {
-		cleared := prompt[1:]
-		for _, s := range skills {
-			if cleared == s.Name {
-				return strings.TrimSpace(string(s.Body))
-			}
+	if !strings.HasPrefix(prompt, "/") || len(prompt) == 1 {
+		return prompt
+	}
+
+	cleared := strings.Fields(prompt[1:])
+	if len(cleared) == 0 {
+		return ""
+	}
+
+	skillName := cleared[0]
+	args := cleared[1:]
+
+	for _, s := range skills {
+		if s.Name != skillName {
+			continue
 		}
+		body := strings.TrimSpace(string(s.Body))
+
+		return argumentRegExp.ReplaceAllStringFunc(body, func(m string) string {
+			sub := argumentRegExp.FindStringSubmatch(m)
+
+			snum := sub[1] + sub[2]
+
+			if snum == "" {
+				return strings.Join(args, " ")
+			}
+
+			num, err := strconv.Atoi(snum)
+
+			if err != nil || num >= len(args) {
+				return ""
+			}
+
+			return args[num]
+		})
 	}
 
 	return prompt

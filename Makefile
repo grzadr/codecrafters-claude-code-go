@@ -7,7 +7,7 @@ all: fmt lint test coverage
 ## fmt: Format all Go source files
 fmt:
 	@echo "==> Formatting code..."
-	go fmt ./...
+	golangci-lint fmt
 
 ## lint: Run linter
 lint:

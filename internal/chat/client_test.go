@@ -214,6 +214,63 @@ description: Reports the deploy target for the cherry service.
 Respond with exactly one word: strawberry
 `
 
+const echoArgsSkill = `---
+name: apple
+description: Echoes all arguments.
+---
+
+$ARGUMENTS
+`
+
+const reverseSkill = `---
+name: grape
+description: Echoes two arguments in reverse.
+---
+
+$1 $0
+`
+
+const deploySkill = `---
+name: deploy
+description: Deploys somewhere.
+---
+
+Deploy to $0 in region $ARGUMENTS[1]. Full request was: $ARGUMENTS ($0 again)
+`
+
+func TestBuildMessages_Arguments(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{name: "full argument string", prompt: "/apple 4127", want: "4127"},
+		{name: "positional in reverse order", prompt: "/grape mango pear", want: "pear mango"},
+		{
+			name:   "mixed placeholders and repeats",
+			prompt: "/deploy staging eu-west",
+			want:   "Deploy to staging in region eu-west. Full request was: staging eu-west (staging again)",
+		},
+		{name: "no arguments become empty strings", prompt: "/grape", want: " "},
+		{name: "no arguments with full placeholder", prompt: "/apple", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, ".claude/skills/apple/SKILL.md", echoArgsSkill)
+			writeFile(t, dir, ".claude/skills/grape/SKILL.md", reverseSkill)
+			writeFile(t, dir, ".claude/skills/deploy/SKILL.md", deploySkill)
+			t.Chdir(dir)
+
+			msgs := chat.BuildMessages(tt.prompt)
+			if got := msgs[len(msgs)-1].OfUser.Content.OfString.Value; got != tt.want {
+				t.Errorf("user message = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildMessages(t *testing.T) {
 	t.Run("without skills", func(t *testing.T) {
 		t.Chdir(t.TempDir())
@@ -303,6 +360,57 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 			}
 
 			assertSkillsListedWithoutBodies(t, msgs[0].OfSystem.Content.OfString.Value)
+		})
+	}
+}
+
+func TestParsePrompt(t *testing.T) {
+	skills := []chat.Skill{
+		{Name: "all", Body: []byte("\n  $ARGUMENTS  \n")},
+		{Name: "pos", Body: []byte("$1 $0")},
+		{Name: "idx", Body: []byte("$ARGUMENTS[1] $ARGUMENTS[0]")},
+		{Name: "mix", Body: []byte("$0|$ARGUMENTS[1]|$ARGUMENTS|$0")},
+		{Name: "far", Body: []byte("[$2][$ARGUMENTS[5]][$99999999999999999999]")},
+		{Name: "ten", Body: []byte("$10")},
+		{Name: "lit", Body: []byte("$ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $x $")},
+		{Name: "plain", Body: []byte("no placeholders")},
+	}
+
+	tests := []struct {
+		name   string
+		prompt string
+		want   string
+	}{
+		{name: "not a slash command", prompt: "all 1 2", want: "all 1 2"},
+		{name: "unknown skill returns prompt", prompt: "/nope a b", want: "/nope a b"},
+		{name: "bare slash", prompt: "/", want: "/"},
+		{name: "slash with only whitespace", prompt: "/ \t ", want: ""},
+		{name: "full arguments with trimmed body", prompt: "/all 4127", want: "4127"},
+		{name: "arguments whitespace collapsed", prompt: "/all  a\t b  ", want: "a b"},
+		{name: "shorthand positional", prompt: "/pos mango pear", want: "pear mango"},
+		{name: "indexed positional", prompt: "/idx mango pear", want: "pear mango"},
+		{name: "mixed and repeated", prompt: "/mix a b", want: "a|b|a b|a"},
+		{name: "out of range and overflow are empty", prompt: "/far a b", want: "[][][]"},
+		{name: "multi-digit index", prompt: "/ten 0 1 2 3 4 5 6 7 8 9 ten", want: "ten"},
+		{name: "no arguments empties placeholders", prompt: "/mix", want: "|||"},
+		{name: "no arguments full placeholder", prompt: "/all", want: ""},
+		{
+			name:   "non-placeholders left literal",
+			prompt: "/lit a",
+			want:   "$ARGUMENTSX $ARGUMENTS_x a[x] $x $",
+		},
+		{
+			name:   "body without placeholders ignores arguments",
+			prompt: "/plain a b",
+			want:   "no placeholders",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := chat.ParsePrompt(tt.prompt, skills); got != tt.want {
+				t.Errorf("ParsePrompt(%q) = %q, want %q", tt.prompt, got, tt.want)
+			}
 		})
 	}
 }
