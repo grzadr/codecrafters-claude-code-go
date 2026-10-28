@@ -1,8 +1,11 @@
-.PHONY: all fmt test coverage coverage-html lint clean
+.PHONY: all fmt test coverage coverage-html lint clean submit
 
 COVERAGE_FILE ?= coverage.out
 
 all: fmt lint test coverage
+
+submit: fmt lint test
+	codecrafters submit
 
 ## fmt: Format all Go source files
 fmt:
@@ -18,6 +21,7 @@ lint:
 test:
 	@echo "==> Running tests..."
 	go test -v -race ./...
+	codecrafters test -previous
 
 ## coverage: Run tests and show statement coverage report
 coverage:
@@ -37,4 +41,3 @@ coverage-html: coverage
 clean:
 	@echo "==> Cleaning artifacts..."
 	rm -f $(COVERAGE_FILE) coverage.html main
-
