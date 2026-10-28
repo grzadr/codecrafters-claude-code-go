@@ -9,6 +9,7 @@ import (
 	"github.com/openai/openai-go/v3"
 
 	chat "github.com/codecrafters-io/claude-code-starter-go/internal/chat"
+	skills "github.com/codecrafters-io/claude-code-starter-go/internal/skills"
 	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
@@ -16,7 +17,10 @@ import (
 var exitFunc = os.Exit
 
 // maxTurns caps model round trips so a model that keeps calling tools cannot loop forever.
-const maxTurns = 50
+const (
+	maxTurns   = 50
+	skillsPath = ".claude/skills"
+)
 
 type mainArgs struct {
 	Prompt string
@@ -41,7 +45,10 @@ func main() {
 
 	client := chat.NewOpenAiClient()
 
-	messages := chat.BuildMessages(args.Prompt)
+	skillsRegistry := skills.InitSkillsRegistry(skillsPath)
+	toolsRegistry, toolsList := tools.InitTools(skillsRegistry)
+
+	messages := chat.BuildMessages(args.Prompt, skillsRegistry)
 
 	ctx := context.Background()
 
@@ -50,7 +57,7 @@ func main() {
 			openai.ChatCompletionNewParams{
 				Model:    "anthropic/claude-haiku-4.5",
 				Messages: messages,
-				Tools:    tools.ToolsList,
+				Tools:    toolsList,
 			},
 		)
 		if err != nil {
@@ -71,7 +78,7 @@ func main() {
 		}
 
 		for _, tc := range msg.ToolCalls {
-			data, execErr := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			data, execErr := toolsRegistry.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 			if execErr != nil {
 				errMsg := fmt.Sprintf("error: %v\n", execErr)
 				fmt.Fprintln(os.Stderr, errMsg)

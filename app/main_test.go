@@ -222,9 +222,9 @@ func TestMainFunc_SkillTool(t *testing.T) {
 			wantAbsent:  "strawberry",
 		},
 		{
-			name:        "unknown skill is an error for the model",
+			name:        "unknown skill returns empty skill message",
 			arguments:   `{"name":"pear"}`,
-			wantContain: "error:",
+			wantContain: "Skill:  (located at )",
 			wantAbsent:  "berry",
 		},
 		{

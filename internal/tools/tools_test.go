@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
 	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
@@ -20,6 +21,8 @@ func TestRead(t *testing.T) {
 	if err := os.WriteFile(filePath, []byte(expectedContent), 0o600); err != nil {
 		t.Fatalf("failed to write test file: %v", err)
 	}
+
+	reg, _ := tools.InitTools(nil)
 
 	tests := []struct {
 		name      string
@@ -48,7 +51,7 @@ func TestRead(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := tools.Execute(t.Context(), "Read", tt.rawArgs)
+			out, err := reg.Execute(t.Context(), "Read", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Read) error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -66,6 +69,8 @@ func TestWrite(t *testing.T) {
 	tmpDir := t.TempDir()
 	filePath := filepath.Join(tmpDir, "output.txt")
 	content := "Hello from Write tool test!"
+
+	reg, _ := tools.InitTools(nil)
 
 	tests := []struct {
 		name    string
@@ -90,7 +95,7 @@ func TestWrite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := tools.Execute(t.Context(), "Write", tt.rawArgs)
+			out, err := reg.Execute(t.Context(), "Write", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Write) error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -111,6 +116,8 @@ func TestWrite(t *testing.T) {
 }
 
 func TestBash(t *testing.T) {
+	reg, _ := tools.InitTools(nil)
+
 	tests := []struct {
 		name     string
 		rawArgs  string
@@ -144,7 +151,7 @@ func TestBash(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := tools.Execute(t.Context(), "Bash", tt.rawArgs)
+			out, err := reg.Execute(t.Context(), "Bash", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Bash) error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -162,15 +169,66 @@ func TestBash(t *testing.T) {
 		ctx, cancel := context.WithCancel(t.Context())
 		time.AfterFunc(20*time.Millisecond, cancel)
 
-		_, err := tools.Execute(ctx, "Bash", `{"command":"sleep 2"}`)
+		_, err := reg.Execute(ctx, "Bash", `{"command":"sleep 2"}`)
 		if err == nil {
 			t.Fatal("expected error on canceled context, got nil")
 		}
 	})
 }
 
+func TestSkill(t *testing.T) {
+	apple := skills.Skill{
+		Name:        "apple",
+		Description: "Use this skill when the user asks for the database migration status.",
+		Path:        ".claude/skills/apple",
+		Body:        []byte("\nRespond with exactly one word: blueberry\n"),
+	}
+	reg, _ := tools.InitTools(skills.SkillRegistry{"apple": apple})
+
+	tests := []struct {
+		name    string
+		rawArgs string
+		want    string
+		wantErr bool
+	}{
+		{
+			name:    "matching skill",
+			rawArgs: `{"name":"apple"}`,
+			want:    apple.Msg(),
+		},
+		{
+			name:    "matching skill with optional args",
+			rawArgs: `{"name":"apple","args":"prod"}`,
+			want:    apple.Msg(),
+		},
+		{
+			name:    "unknown skill",
+			rawArgs: `{"name":"pear"}`,
+			want:    (&skills.Skill{}).Msg(),
+		},
+		{
+			name:    "invalid json",
+			rawArgs: "{invalid-json",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := reg.Execute(t.Context(), "Skill", tt.rawArgs)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Execute(Skill) error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && string(out) != tt.want {
+				t.Errorf("got %q, want %q", string(out), tt.want)
+			}
+		})
+	}
+}
+
 func TestExecute_UnknownTool(t *testing.T) {
-	_, err := tools.Execute(t.Context(), "NonExistentTool", "{}")
+	reg, _ := tools.InitTools(nil)
+	_, err := reg.Execute(t.Context(), "NonExistentTool", "{}")
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
 	}
@@ -184,8 +242,9 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 		Name string `json:"name"`
 	}
 
+	reg, _ := tools.InitTools(nil)
 	greetCalled := false
-	tools.ToolsRegistry["Greet"] = func(ctx context.Context, rawArgs string) ([]byte, error) {
+	reg["Greet"] = func(ctx context.Context, rawArgs string) ([]byte, error) {
 		if ctx == nil {
 			return nil, errors.New("expected non-nil context")
 		}
@@ -199,9 +258,8 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 		greetCalled = true
 		return []byte("Hello, Claude!"), nil
 	}
-	defer delete(tools.ToolsRegistry, "Greet")
 
-	res, err := tools.Execute(t.Context(), "Greet", `{"name":"Claude"}`)
+	res, err := reg.Execute(t.Context(), "Greet", `{"name":"Claude"}`)
 	if err != nil {
 		t.Fatalf("unexpected error for custom tool: %v", err)
 	}
@@ -213,14 +271,15 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 	}
 }
 
-func TestToolsList(t *testing.T) {
-	wantNames := []string{"Read", "Write", "Bash"}
-	if len(tools.ToolsList) != len(wantNames) {
-		t.Fatalf("got %d tools in ToolsList, want %d", len(tools.ToolsList), len(wantNames))
+func TestInitTools(t *testing.T) {
+	_, toolsList := tools.InitTools(nil)
+	wantNames := []string{"Read", "Write", "Bash", "Skill"}
+	if len(toolsList) != len(wantNames) {
+		t.Fatalf("got %d tools in toolsList, want %d", len(toolsList), len(wantNames))
 	}
 	for i, want := range wantNames {
-		if got := tools.ToolsList[i].OfFunction.Function.Name; got != want {
-			t.Errorf("ToolsList[%d] name = %q, want %q", i, got, want)
+		if got := toolsList[i].OfFunction.Function.Name; got != want {
+			t.Errorf("toolsList[%d] name = %q, want %q", i, got, want)
 		}
 	}
 }

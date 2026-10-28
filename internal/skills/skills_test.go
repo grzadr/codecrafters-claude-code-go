@@ -43,7 +43,7 @@ func skillEqual(a, b skills.Skill) bool {
 	return a.Name == b.Name && a.Description == b.Description && bytes.Equal(a.Body, b.Body)
 }
 
-func TestReadSkills(t *testing.T) {
+func TestInitSkillsRegistry(t *testing.T) {
 	apple := skills.Skill{
 		Name:        "apple",
 		Description: "Deploys the apple service to production.",
@@ -164,26 +164,26 @@ description: "Deploys: the apple service"
 				want[s.Name] = s
 			}
 
-			got := skills.ReadSkills(dir)
+			got := skills.InitSkillsRegistry(dir)
 			if !maps.EqualFunc(got, want, skillEqual) {
-				t.Errorf("ReadSkills() = %+v, want %+v", got, tt.want)
+				t.Errorf("InitSkillsRegistry() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}
 }
 
-func TestReadSkills_MissingDir(t *testing.T) {
-	got := skills.ReadSkills(filepath.Join(t.TempDir(), "does-not-exist"))
+func TestInitSkillsRegistry_MissingDir(t *testing.T) {
+	got := skills.InitSkillsRegistry(filepath.Join(t.TempDir(), "does-not-exist"))
 	if len(got) != 0 {
 		t.Errorf("expected no skills for missing dir, got %+v", got)
 	}
 }
 
-func TestReadSkills_PathIsFile(t *testing.T) {
+func TestInitSkillsRegistry_PathIsFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "skills", "not a dir")
 
-	got := skills.ReadSkills(filepath.Join(dir, "skills"))
+	got := skills.InitSkillsRegistry(filepath.Join(dir, "skills"))
 	if len(got) != 0 {
 		t.Errorf("expected no skills when path is a file, got %+v", got)
 	}
@@ -196,41 +196,4 @@ func TestSkillMsg(t *testing.T) {
 	if got := s.Msg(); got != want {
 		t.Errorf("Msg() = %q, want %q", got, want)
 	}
-}
-
-func TestGetSkills(t *testing.T) {
-	t.Run("reads .claude/skills in the working directory", func(t *testing.T) {
-		skills.ResetSkills()
-		dir := t.TempDir()
-		writeFile(t, dir, ".claude/skills/apple/SKILL.md", appleSkill)
-		t.Chdir(dir)
-
-		got := skills.GetSkills()
-		if _, ok := got["apple"]; !ok || len(got) != 1 {
-			t.Errorf("GetSkills() = %+v, want only apple", got)
-		}
-	})
-
-	t.Run("result is cached after the first call", func(t *testing.T) {
-		skills.ResetSkills()
-		dir := t.TempDir()
-		writeFile(t, dir, ".claude/skills/apple/SKILL.md", appleSkill)
-		t.Chdir(dir)
-		first := skills.GetSkills()
-
-		writeFile(t, dir, ".claude/skills/grape/SKILL.md", grapeSkill)
-		t.Chdir(t.TempDir())
-
-		if got := skills.GetSkills(); !maps.EqualFunc(got, first, skillEqual) {
-			t.Errorf("second GetSkills() = %+v, want cached %+v", got, first)
-		}
-	})
-
-	t.Run("no skills dir gives empty registry", func(t *testing.T) {
-		skills.ResetSkills()
-		t.Chdir(t.TempDir())
-		if got := skills.GetSkills(); len(got) != 0 {
-			t.Errorf("GetSkills() = %+v, want empty", got)
-		}
-	})
 }

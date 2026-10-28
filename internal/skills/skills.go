@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -56,7 +55,7 @@ func newSkill(path string, content []byte) (Skill, error) {
 
 type SkillRegistry map[string]Skill
 
-func readSkills(path string) SkillRegistry {
+func InitSkillsRegistry(path string) SkillRegistry {
 	entries, err := os.ReadDir(path)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -77,8 +76,6 @@ func readSkills(path string) SkillRegistry {
 			continue
 		}
 
-		// skillPath := filepath.Join(path, entry.Name())
-
 		mdPath := filepath.Join(path, entry.Name(), "SKILL.md")
 
 		content, readErr := os.ReadFile(mdPath)
@@ -98,22 +95,3 @@ func readSkills(path string) SkillRegistry {
 
 	return skills
 }
-
-var (
-	registry SkillRegistry
-	once     sync.Once
-)
-
-const skillsPath = ".claude/skills"
-
-func GetSkills() SkillRegistry {
-	once.Do(func() {
-		registry = readSkills(skillsPath)
-	})
-	return registry
-}
-
-// const (
-//
-// 	skillPrefix = "/"
-// )

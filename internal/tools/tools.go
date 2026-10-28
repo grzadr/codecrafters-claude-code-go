@@ -12,6 +12,8 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/shared"
+
+	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
 )
 
 type Property struct {
@@ -64,25 +66,6 @@ const (
 	propFilePath     = "file_path"
 )
 
-//nolint:gochecknoglobals // static Read tool definition
-var ReadTool = Tool{
-	Type: toolTypeFunction,
-	Function: Function{
-		Name:        "Read",
-		Description: "Read and return the contents of a file",
-		Parameters: Parameter{
-			Type: paramTypeObject,
-			Properties: map[string]Property{
-				propFilePath: {
-					Type:        propTypeString,
-					Description: "The path to the file to read",
-				},
-			},
-			Required: []string{propFilePath},
-		},
-	},
-}
-
 type ReadArgs struct {
 	FilePath string `json:"file_path"`
 }
@@ -94,29 +77,6 @@ func ReadFunc(_ context.Context, rawArgs string) ([]byte, error) {
 	}
 
 	return os.ReadFile(args.FilePath)
-}
-
-//nolint:gochecknoglobals // static Write tool definition
-var WriteTool = Tool{
-	Type: toolTypeFunction,
-	Function: Function{
-		Name:        "Write",
-		Description: "Write content to a file",
-		Parameters: Parameter{
-			Type: paramTypeObject,
-			Properties: map[string]Property{
-				propFilePath: {
-					Type:        propTypeString,
-					Description: "The path of the file to write to",
-				},
-				"content": {
-					Type:        propTypeString,
-					Description: "The content to write to the file",
-				},
-			},
-			Required: []string{propFilePath, "content"},
-		},
-	},
 }
 
 func WriteStringToFile(filePath, content string) error {
@@ -135,25 +95,6 @@ func WriteFunc(_ context.Context, rawArgs string) ([]byte, error) {
 	}
 
 	return nil, WriteStringToFile(args.FilePath, args.Content)
-}
-
-//nolint:gochecknoglobals // static Bash tool definition
-var BashTool = Tool{
-	Type: toolTypeFunction,
-	Function: Function{
-		Name:        "Bash",
-		Description: "Execute a shell command",
-		Parameters: Parameter{
-			Type: paramTypeObject,
-			Properties: map[string]Property{
-				"command": {
-					Type:        propTypeString,
-					Description: "The command to execute",
-				},
-			},
-			Required: []string{"command"},
-		},
-	},
 }
 
 type ProcessError struct {
@@ -217,20 +158,31 @@ func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 	return runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
 }
 
-func SkillFunc(_ context.Context, rawArgs string) ([]byte, error) {
-	return nil, nil
+type Registry map[string]func(ctx context.Context, rawArgs string) ([]byte, error)
+
+func newToolsRegistry(s skills.SkillRegistry) Registry {
+	return Registry{
+		"Read":  ReadFunc,
+		"Write": WriteFunc,
+		"Bash":  BashFunc,
+		"Skill": func(_ context.Context, rawArgs string) ([]byte, error) {
+			var args struct {
+				Name string `json:"name"`
+				Args string `json:"args"`
+			}
+			if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+				return nil, err
+			}
+
+			s := s[args.Name]
+
+			return []byte(s.Msg()), nil
+		},
+	}
 }
 
-//nolint:gochecknoglobals // registry maps tool names to handlers
-var ToolsRegistry = map[string]func(ctx context.Context, rawArgs string) ([]byte, error){
-	"Read":  ReadFunc,
-	"Write": WriteFunc,
-	"Bash":  BashFunc,
-	"Skill": SkillFunc,
-}
-
-func Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
-	fn, ok := ToolsRegistry[name]
+func (r Registry) Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
+	fn, ok := r[name]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -238,9 +190,101 @@ func Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
 	return fn(ctx, rawArgs)
 }
 
-//nolint:gochecknoglobals // precomputed OpenAI tool parameter list
-var ToolsList = []openai.ChatCompletionToolUnionParam{
-	ReadTool.ToParam(),
-	WriteTool.ToParam(),
-	BashTool.ToParam(),
+func newReadTool() Tool {
+	return Tool{
+		Type: toolTypeFunction,
+		Function: Function{
+			Name:        "Read",
+			Description: "Read and return the contents of a file",
+			Parameters: Parameter{
+				Type: paramTypeObject,
+				Properties: map[string]Property{
+					propFilePath: {
+						Type:        propTypeString,
+						Description: "The path to the file to read",
+					},
+				},
+				Required: []string{propFilePath},
+			},
+		},
+	}
+}
+
+func newWriteTool() Tool {
+	return Tool{
+		Type: toolTypeFunction,
+		Function: Function{
+			Name:        "Write",
+			Description: "Write content to a file",
+			Parameters: Parameter{
+				Type: paramTypeObject,
+				Properties: map[string]Property{
+					propFilePath: {
+						Type:        propTypeString,
+						Description: "The path of the file to write to",
+					},
+					"content": {
+						Type:        propTypeString,
+						Description: "The content to write to the file",
+					},
+				},
+				Required: []string{propFilePath, "content"},
+			},
+		},
+	}
+}
+
+func newBashTool() Tool {
+	return Tool{
+		Type: toolTypeFunction,
+		Function: Function{
+			Name:        "Bash",
+			Description: "Execute a shell command",
+			Parameters: Parameter{
+				Type: paramTypeObject,
+				Properties: map[string]Property{
+					"command": {
+						Type:        propTypeString,
+						Description: "The command to execute",
+					},
+				},
+				Required: []string{"command"},
+			},
+		},
+	}
+}
+
+func newSkillTool() Tool {
+	return Tool{
+		Type: toolTypeFunction,
+		Function: Function{
+			Name:        "Skill",
+			Description: "Load a skill's instructions into the conversation",
+			Parameters: Parameter{
+				Type: paramTypeObject,
+				Properties: map[string]Property{
+					"name": {
+						Type:        propTypeString,
+						Description: "The name of the skill to use",
+					},
+					"args": {
+						Type:        propTypeString,
+						Description: "Optional arguments for the skill",
+					},
+				},
+				Required: []string{"name"},
+			},
+		},
+	}
+}
+
+func InitTools(
+	s skills.SkillRegistry,
+) (Registry, []openai.ChatCompletionToolUnionParam) {
+	return newToolsRegistry(s), []openai.ChatCompletionToolUnionParam{
+		newReadTool().ToParam(),
+		newWriteTool().ToParam(),
+		newBashTool().ToParam(),
+		newSkillTool().ToParam(),
+	}
 }

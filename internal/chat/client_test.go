@@ -153,7 +153,8 @@ func TestBuildMessages_Arguments(t *testing.T) {
 			writeFile(t, dir, ".claude/skills/deploy/SKILL.md", deploySkill)
 			t.Chdir(dir)
 
-			msgs := chat.BuildMessages(tt.prompt)
+			reg := skills.InitSkillsRegistry(".claude/skills")
+			msgs := chat.BuildMessages(tt.prompt, reg)
 			if got := msgs[len(msgs)-1].OfUser.Content.OfString.Value; got != tt.want {
 				t.Errorf("user message = %q, want %q", got, tt.want)
 			}
@@ -163,8 +164,7 @@ func TestBuildMessages_Arguments(t *testing.T) {
 
 func TestBuildMessages(t *testing.T) {
 	t.Run("without skills", func(t *testing.T) {
-		t.Chdir(t.TempDir())
-		msgs := chat.BuildMessages("hello")
+		msgs := chat.BuildMessages("hello", nil)
 		if len(msgs) != 1 {
 			t.Fatalf("got %d messages, want 1", len(msgs))
 		}
@@ -177,7 +177,8 @@ func TestBuildMessages(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".claude/skills/apple/SKILL.md", appleSkill)
 		t.Chdir(dir)
-		msgs := chat.BuildMessages("hello")
+		reg := skills.InitSkillsRegistry(".claude/skills")
+		msgs := chat.BuildMessages("hello", reg)
 		if len(msgs) != 2 {
 			t.Fatalf("got %d messages, want 2", len(msgs))
 		}
@@ -244,7 +245,8 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 			writeFile(t, dir, ".claude/skills/cherry/SKILL.md", cherrySkill)
 			t.Chdir(dir)
 
-			msgs := chat.BuildMessages(tt.prompt)
+			reg := skills.InitSkillsRegistry(".claude/skills")
+			msgs := chat.BuildMessages(tt.prompt, reg)
 			if len(msgs) != 2 {
 				t.Fatalf("got %d messages, want 2", len(msgs))
 			}
@@ -409,7 +411,8 @@ func TestBuildMessages_StackedSkills(t *testing.T) {
 			writeFile(t, dir, ".claude/skills/mango/SKILL.md", stackMangoSkill)
 			t.Chdir(dir)
 
-			msgs := chat.BuildMessages(tt.prompt)
+			reg := skills.InitSkillsRegistry(".claude/skills")
+			msgs := chat.BuildMessages(tt.prompt, reg)
 			if len(msgs) == 0 || msgs[0].OfSystem == nil {
 				t.Fatalf("first message is not the system message: %+v", msgs)
 			}
@@ -508,8 +511,9 @@ func TestBuildMessages_SkillLocation(t *testing.T) {
 			}
 			t.Chdir(dir)
 
+			reg := skills.InitSkillsRegistry(".claude/skills")
 			var got []string
-			for _, m := range chat.BuildMessages(tt.prompt) {
+			for _, m := range chat.BuildMessages(tt.prompt, reg) {
 				if m.OfUser != nil {
 					got = append(got, m.OfUser.Content.OfString.Value)
 				}
@@ -523,16 +527,14 @@ func TestBuildMessages_SkillLocation(t *testing.T) {
 }
 
 func TestBuildMessages_SkillToolInstructions(t *testing.T) {
-	const instructions = "\n\nIf a skill matches the user's request, call the Skill tool with its name\n" +
-		"and follow the instructions it returns."
-
-	t.Run("system prompt lists skills then points to the Skill tool", func(t *testing.T) {
+	t.Run("system prompt lists skills", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".claude/skills/banana/SKILL.md", bananaSkill)
 		writeFile(t, dir, ".claude/skills/cherry/SKILL.md", cherrySkill)
 		t.Chdir(dir)
 
-		msgs := chat.BuildMessages("What is the deploy target?")
+		reg := skills.InitSkillsRegistry(".claude/skills")
+		msgs := chat.BuildMessages("What is the deploy target?", reg)
 		if len(msgs) == 0 || msgs[0].OfSystem == nil {
 			t.Fatalf("first message is not the system message: %+v", msgs)
 		}
@@ -540,7 +542,7 @@ func TestBuildMessages_SkillToolInstructions(t *testing.T) {
 
 		want := "You have access to the following skills:\n\n" +
 			"- banana: Reports the deploy target for the banana service.\n" +
-			"- cherry: Reports the deploy target for the cherry service." + instructions
+			"- cherry: Reports the deploy target for the cherry service."
 		if strings.TrimSpace(system) != want {
 			t.Errorf("system message = %q, want %q", system, want)
 		}
@@ -548,8 +550,7 @@ func TestBuildMessages_SkillToolInstructions(t *testing.T) {
 	})
 
 	t.Run("no skills means no system message", func(t *testing.T) {
-		t.Chdir(t.TempDir())
-		for _, m := range chat.BuildMessages("hello") {
+		for _, m := range chat.BuildMessages("hello", nil) {
 			if m.OfSystem != nil {
 				t.Errorf("unexpected system message: %q", m.OfSystem.Content.OfString.Value)
 			}
