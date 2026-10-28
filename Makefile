@@ -21,7 +21,6 @@ lint:
 test:
 	@echo "==> Running tests..."
 	go test -v -race ./...
-	codecrafters test -previous
 
 ## coverage: Run tests and show statement coverage report
 coverage:

@@ -15,6 +15,9 @@ import (
 //nolint:gochecknoglobals // injectable exit hook for testing main
 var exitFunc = os.Exit
 
+// maxTurns caps model round trips so a model that keeps calling tools cannot loop forever.
+const maxTurns = 50
+
 type mainArgs struct {
 	Prompt string
 }
@@ -42,7 +45,7 @@ func main() {
 
 	ctx := context.Background()
 
-	for {
+	for range maxTurns {
 		resp, err := client.Chat.Completions.New(ctx,
 			openai.ChatCompletionNewParams{
 				Model:    "anthropic/claude-haiku-4.5",
@@ -64,17 +67,21 @@ func main() {
 
 		if len(msg.ToolCalls) == 0 {
 			_, _ = os.Stdout.WriteString(msg.Content)
-			break
+			return
 		}
 
 		for _, tc := range msg.ToolCalls {
 			data, execErr := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 			if execErr != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", execErr)
-				messages = append(messages, openai.ToolMessage(execErr.Error(), tc.ID))
+				errMsg := fmt.Sprintf("error: %v\n", execErr)
+				fmt.Fprintln(os.Stderr, errMsg)
+				messages = append(messages, openai.ToolMessage(errMsg, tc.ID))
 				continue
 			}
 			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
 		}
 	}
+
+	fmt.Fprintf(os.Stderr, "error: gave up after %d turns\n", maxTurns)
+	exitFunc(1)
 }
