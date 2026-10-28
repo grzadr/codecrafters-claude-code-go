@@ -71,8 +71,8 @@ func main() {
 			data, execErr := tools.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 			if execErr != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", execErr)
-				exitFunc(1)
-				return
+				messages = append(messages, openai.ToolMessage(execErr.Error(), tc.ID))
+				continue
 			}
 			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
 		}
