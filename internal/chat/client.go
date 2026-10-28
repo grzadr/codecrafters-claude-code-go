@@ -5,9 +5,11 @@ import (
 	"cmp"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -173,7 +175,8 @@ func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
 		var systemMsg strings.Builder
 		systemMsg.WriteString("You have access to the following skills:\n\n")
 
-		for _, skill := range skills {
+		for _, s := range slices.Sorted(maps.Keys(skills)) {
+			skill := skills[s]
 			fmt.Fprintf(&systemMsg, "- %s: %s\n", skill.Name, skill.Description)
 		}
 
