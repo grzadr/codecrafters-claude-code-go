@@ -217,11 +217,16 @@ func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 	return runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
 }
 
+func SkillFunc(_ context.Context, rawArgs string) ([]byte, error) {
+	return nil, nil
+}
+
 //nolint:gochecknoglobals // registry maps tool names to handlers
 var ToolsRegistry = map[string]func(ctx context.Context, rawArgs string) ([]byte, error){
 	"Read":  ReadFunc,
 	"Write": WriteFunc,
 	"Bash":  BashFunc,
+	"Skill": SkillFunc,
 }
 
 func Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
