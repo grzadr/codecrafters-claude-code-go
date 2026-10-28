@@ -45,6 +45,20 @@ func skillEqual(a, b chat.Skill) bool {
 	return a.Name == b.Name && a.Description == b.Description && bytes.Equal(a.Body, b.Body)
 }
 
+// skillMsg is the user message expected when the skill in .claude/skills/<folder> is invoked.
+func skillMsg(folder, name, body string) string {
+	return "Skill: " + name + " (located at .claude/skills/" + folder + ")\n" +
+		"Paths in the instructions below are relative to that folder.\n\n" + body
+}
+
+// stripSkillHeader drops the skill location header so tests can compare only the expanded body.
+func stripSkillHeader(msg string) string {
+	if _, body, ok := strings.Cut(msg, "relative to that folder.\n\n"); ok {
+		return body
+	}
+	return msg
+}
+
 func TestReadSkills(t *testing.T) {
 	apple := chat.Skill{
 		Name:        "apple",
@@ -250,15 +264,35 @@ func TestBuildMessages_Arguments(t *testing.T) {
 		prompt string
 		want   string
 	}{
-		{name: "full argument string", prompt: "/apple 4127", want: "4127"},
-		{name: "positional in reverse order", prompt: "/grape mango pear", want: "pear mango"},
+		{
+			name:   "full argument string",
+			prompt: "/apple 4127",
+			want:   skillMsg("apple", "apple", "4127"),
+		},
+		{
+			name:   "positional in reverse order",
+			prompt: "/grape mango pear",
+			want:   skillMsg("grape", "grape", "pear mango"),
+		},
 		{
 			name:   "mixed placeholders and repeats",
 			prompt: "/deploy staging eu-west",
-			want:   "Deploy to staging in region eu-west. Full request was: staging eu-west (staging again)",
+			want: skillMsg(
+				"deploy",
+				"deploy",
+				"Deploy to staging in region eu-west. Full request was: staging eu-west (staging again)",
+			),
 		},
-		{name: "no arguments become empty strings", prompt: "/grape", want: " "},
-		{name: "no arguments with full placeholder", prompt: "/apple", want: ""},
+		{
+			name:   "no arguments become empty strings",
+			prompt: "/grape",
+			want:   skillMsg("grape", "grape", " "),
+		},
+		{
+			name:   "no arguments with full placeholder",
+			prompt: "/apple",
+			want:   skillMsg("apple", "apple", ""),
+		},
 	}
 
 	for _, tt := range tests {
@@ -330,12 +364,16 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 		{
 			name:   "slash command loads invoked skill body",
 			prompt: "/banana",
-			want:   "Respond with exactly one word: blueberry\n\nDo not add any other text, punctuation, or formatting.",
+			want: skillMsg(
+				"banana",
+				"banana",
+				"Respond with exactly one word: blueberry\n\nDo not add any other text, punctuation, or formatting.",
+			),
 		},
 		{
 			name:   "slash command loads the other skill body",
 			prompt: "/cherry",
-			want:   "Respond with exactly one word: strawberry",
+			want:   skillMsg("cherry", "cherry", "Respond with exactly one word: strawberry"),
 		},
 		{
 			name:   "unknown slash command sends raw prompt",
@@ -414,7 +452,8 @@ func TestParsePrompt(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := chat.ParsePrompt(tt.prompt, skills); !slices.Equal(got, []string{tt.want}) {
+			got := chat.ParsePrompt(tt.prompt, skills)
+			if len(got) != 1 || stripSkillHeader(got[0]) != tt.want {
 				t.Errorf("ParsePrompt(%q) = %q, want [%q]", tt.prompt, got, tt.want)
 			}
 		})
@@ -456,10 +495,9 @@ kiwi-$1-$0
 `
 
 func TestBuildMessages_StackedSkills(t *testing.T) {
-	const (
-		apple = "Add this exact line to your response: blueberry-"
-		grape = "Add this exact line to your response: cherry-"
-	)
+	apple := skillMsg("apple", "apple", "Add this exact line to your response: blueberry-")
+	grape := skillMsg("grape", "grape", "Add this exact line to your response: cherry-")
+	mango := func(body string) string { return skillMsg("mango", "mango", body) }
 
 	tests := []struct {
 		name   string
@@ -504,7 +542,7 @@ func TestBuildMessages_StackedSkills(t *testing.T) {
 		{
 			name:   "three skills with positional placeholders",
 			prompt: "/apple /grape /mango a b",
-			want:   []string{apple + "a b", grape + "a b", "kiwi-b-a"},
+			want:   []string{apple + "a b", grape + "a b", mango("kiwi-b-a")},
 		},
 		{
 			name:   "repeated skill is expanded twice",
@@ -542,6 +580,99 @@ func TestBuildMessages_StackedSkills(t *testing.T) {
 					t.Fatalf("non-user message after system message: %+v", m)
 				}
 				got = append(got, m.OfUser.Content.OfString.Value)
+			}
+
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("user messages = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+const checksumSkill = `---
+name: apple
+description: Reports the checksum of the project data file.
+---
+
+Run ` + "`scripts/checksum.sh`" + ` using the Bash tool.
+
+Respond with only the value it prints, and nothing else.
+`
+
+func TestBuildMessages_SkillLocation(t *testing.T) {
+	const checksumBody = "Run `scripts/checksum.sh` using the Bash tool.\n\n" +
+		"Respond with only the value it prints, and nothing else."
+
+	tests := []struct {
+		name   string
+		files  map[string]string // relative to the project root
+		prompt string
+		want   []string // expected user messages, in order
+	}{
+		{
+			name: "tester example with bundled script",
+			files: map[string]string{
+				".claude/skills/apple/SKILL.md":            checksumSkill,
+				".claude/skills/apple/data.txt":            "random contents",
+				".claude/skills/apple/scripts/checksum.sh": "#!/usr/bin/env bash\n",
+			},
+			prompt: "/apple",
+			want: []string{
+				"Skill: apple (located at .claude/skills/apple)\n" +
+					"Paths in the instructions below are relative to that folder.\n\n" + checksumBody,
+			},
+		},
+		{
+			name:   "location is the folder, not the skill name",
+			files:  map[string]string{".claude/skills/fruit/SKILL.md": checksumSkill},
+			prompt: "/apple",
+			want:   []string{skillMsg("fruit", "apple", checksumBody)},
+		},
+		{
+			name:   "header added even when body names no paths",
+			files:  map[string]string{".claude/skills/banana/SKILL.md": bananaSkill},
+			prompt: "/banana",
+			want: []string{
+				skillMsg(
+					"banana",
+					"banana",
+					"Respond with exactly one word: blueberry\n\nDo not add any other text, punctuation, or formatting.",
+				),
+			},
+		},
+		{
+			name: "each stacked skill names its own folder",
+			files: map[string]string{
+				".claude/skills/apple/SKILL.md":  checksumSkill,
+				".claude/skills/cherry/SKILL.md": cherrySkill,
+			},
+			prompt: "/cherry /apple",
+			want: []string{
+				skillMsg("cherry", "cherry", "Respond with exactly one word: strawberry"),
+				skillMsg("apple", "apple", checksumBody),
+			},
+		},
+		{
+			name:   "plain prompt gets no header",
+			files:  map[string]string{".claude/skills/apple/SKILL.md": checksumSkill},
+			prompt: "run scripts/checksum.sh",
+			want:   []string{"run scripts/checksum.sh"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for rel, content := range tt.files {
+				writeFile(t, dir, rel, content)
+			}
+			t.Chdir(dir)
+
+			var got []string
+			for _, m := range chat.BuildMessages(tt.prompt) {
+				if m.OfUser != nil {
+					got = append(got, m.OfUser.Content.OfString.Value)
+				}
 			}
 
 			if !slices.Equal(got, tt.want) {

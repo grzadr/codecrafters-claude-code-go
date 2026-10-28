@@ -32,12 +32,23 @@ func NewOpenAiClient() openai.Client {
 type Skill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	Path        string
 	Body        []byte
+}
+
+func (s *Skill) Msg() string {
+	return fmt.Sprintf(
+		"Skill: %s (located at %s)\n"+
+			"Paths in the instructions below are relative to that folder.\n\n%s",
+		s.Name,
+		s.Path,
+		strings.TrimSpace(string(s.Body)),
+	)
 }
 
 const skillHeaderSeparator = "---\n"
 
-func newSkill(content []byte) (Skill, error) {
+func newSkill(path string, content []byte) (Skill, error) {
 	sep := []byte(skillHeaderSeparator)
 	content, found := bytes.CutPrefix(content, sep)
 	if !found {
@@ -54,6 +65,7 @@ func newSkill(content []byte) (Skill, error) {
 		return Skill{}, err
 	}
 
+	s.Path = path
 	s.Body = body
 
 	return s, nil
@@ -82,17 +94,19 @@ func readSkills(path string) SkillRegistry {
 			continue
 		}
 
-		skillPath := filepath.Join(path, entry.Name(), "SKILL.md")
+		skillPath := filepath.Join(path, entry.Name())
 
-		content, readErr := os.ReadFile(skillPath)
+		mdPath := filepath.Join(skillPath, "SKILL.md")
+
+		content, readErr := os.ReadFile(mdPath)
 		if readErr != nil {
-			fmt.Fprintf(os.Stderr, "error reading skill %s: %v\n", skillPath, readErr)
+			fmt.Fprintf(os.Stderr, "error reading skill %s: %v\n", mdPath, readErr)
 			continue
 		}
 
-		skill, parseErr := newSkill(content)
+		skill, parseErr := newSkill(skillPath, content)
 		if parseErr != nil {
-			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", skillPath, parseErr)
+			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", mdPath, parseErr)
 			continue
 		}
 
@@ -140,7 +154,7 @@ func parsePrompt(prompt string, skills SkillRegistry) []string {
 	userPrompts := make([]string, 0, len(namesSkills))
 
 	for _, s := range namesSkills {
-		body := strings.TrimSpace(string(s.Body))
+		body := s.Msg()
 
 		out := argumentRegExp.ReplaceAllStringFunc(body, func(m string) string {
 			sub := argumentRegExp.FindStringSubmatch(m)
