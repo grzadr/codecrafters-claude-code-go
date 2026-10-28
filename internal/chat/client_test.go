@@ -1,9 +1,11 @@
 package chat_test
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/codecrafters-io/claude-code-starter-go/internal/chat"
@@ -37,14 +39,21 @@ description: Runs the grape test suite and reports failures.
 Run the tests.
 `
 
+// skillEqual compares skills treating nil and empty Content as equal.
+func skillEqual(a, b chat.Skill) bool {
+	return a.Name == b.Name && a.Description == b.Description && bytes.Equal(a.Body, b.Body)
+}
+
 func TestReadSkills(t *testing.T) {
 	apple := chat.Skill{
 		Name:        "apple",
 		Description: "Deploys the apple service to production.",
+		Body:        []byte("\nRun the deploy script and report the version that was deployed.\n"),
 	}
 	grape := chat.Skill{
 		Name:        "grape",
 		Description: "Runs the grape test suite and reports failures.",
+		Body:        []byte("\nRun the tests.\n"),
 	}
 
 	tests := []struct {
@@ -99,7 +108,15 @@ Body text.
 name: evil
 description: should never be read
 `},
-			want: []chat.Skill{apple},
+			want: []chat.Skill{
+				{
+					Name:        "apple",
+					Description: "Deploys the apple service to production.",
+					Body: []byte(
+						"\nBody text.\n\n---\nname: evil\ndescription: should never be read\n",
+					),
+				},
+			},
 		},
 		{
 			name: "quoted description containing a colon",
@@ -144,7 +161,7 @@ description: "Deploys: the apple service"
 			}
 
 			got := chat.ReadSkills(dir)
-			if !slices.Equal(got, tt.want) {
+			if !slices.EqualFunc(got, tt.want, skillEqual) {
 				t.Errorf("ReadSkills() = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -179,12 +196,33 @@ func TestNewOpenAiClient(t *testing.T) {
 	})
 }
 
+const bananaSkill = `---
+name: banana
+description: Reports the deploy target for the banana service.
+---
+
+Respond with exactly one word: blueberry
+
+Do not add any other text, punctuation, or formatting.
+`
+
+const cherrySkill = `---
+name: cherry
+description: Reports the deploy target for the cherry service.
+---
+
+Respond with exactly one word: strawberry
+`
+
 func TestBuildMessages(t *testing.T) {
 	t.Run("without skills", func(t *testing.T) {
 		t.Chdir(t.TempDir())
 		msgs := chat.BuildMessages("hello")
 		if len(msgs) != 1 {
 			t.Fatalf("got %d messages, want 1", len(msgs))
+		}
+		if got := msgs[0].OfUser.Content.OfString.Value; got != "hello" {
+			t.Errorf("user message = %q, want %q", got, "hello")
 		}
 	})
 
@@ -196,5 +234,75 @@ func TestBuildMessages(t *testing.T) {
 		if len(msgs) != 2 {
 			t.Fatalf("got %d messages, want 2", len(msgs))
 		}
+		if got := msgs[1].OfUser.Content.OfString.Value; got != "hello" {
+			t.Errorf("user message = %q, want %q", got, "hello")
+		}
 	})
+}
+
+// assertSkillsListedWithoutBodies checks the system message lists every skill at level 1 only.
+func assertSkillsListedWithoutBodies(t *testing.T, system string) {
+	t.Helper()
+	for _, line := range []string{
+		"- banana: Reports the deploy target for the banana service.",
+		"- cherry: Reports the deploy target for the cherry service.",
+	} {
+		if !strings.Contains(system, line) {
+			t.Errorf("system message missing %q:\n%s", line, system)
+		}
+	}
+	for _, body := range []string{"blueberry", "strawberry"} {
+		if strings.Contains(system, body) {
+			t.Errorf("system message leaks skill body %q:\n%s", body, system)
+		}
+	}
+}
+
+func TestBuildMessages_SlashCommand(t *testing.T) {
+	tests := []struct {
+		name   string
+		prompt string
+		want   string // expected user message content
+	}{
+		{
+			name:   "slash command loads invoked skill body",
+			prompt: "/banana",
+			want:   "Respond with exactly one word: blueberry\n\nDo not add any other text, punctuation, or formatting.",
+		},
+		{
+			name:   "slash command loads the other skill body",
+			prompt: "/cherry",
+			want:   "Respond with exactly one word: strawberry",
+		},
+		{
+			name:   "unknown slash command sends raw prompt",
+			prompt: "/unknown",
+			want:   "/unknown",
+		},
+		{
+			name:   "prompt without slash is sent as is",
+			prompt: "banana",
+			want:   "banana",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, ".claude/skills/banana/SKILL.md", bananaSkill)
+			writeFile(t, dir, ".claude/skills/cherry/SKILL.md", cherrySkill)
+			t.Chdir(dir)
+
+			msgs := chat.BuildMessages(tt.prompt)
+			if len(msgs) != 2 {
+				t.Fatalf("got %d messages, want 2", len(msgs))
+			}
+
+			if got := msgs[1].OfUser.Content.OfString.Value; got != tt.want {
+				t.Errorf("user message = %q, want %q", got, tt.want)
+			}
+
+			assertSkillsListedWithoutBodies(t, msgs[0].OfSystem.Content.OfString.Value)
+		})
+	}
 }

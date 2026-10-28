@@ -28,6 +28,7 @@ func NewOpenAiClient() openai.Client {
 type Skill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	Body        []byte
 }
 
 const skillHeaderSeparator = "---\n"
@@ -39,7 +40,7 @@ func newSkill(content []byte) (Skill, error) {
 		return Skill{}, errors.New("skill description not prefixed with `---\n`")
 	}
 
-	header, _, found := bytes.Cut(content, sep)
+	header, body, found := bytes.Cut(content, sep)
 	if !found {
 		return Skill{}, errors.New("skill description never closed")
 	}
@@ -48,6 +49,8 @@ func newSkill(content []byte) (Skill, error) {
 	if err := yaml.Unmarshal(header, &s); err != nil {
 		return Skill{}, err
 	}
+
+	s.Body = body
 
 	return s, nil
 }
@@ -92,6 +95,19 @@ func readSkills(path string) []Skill {
 
 const skillsPath = ".claude/skills"
 
+func parsePrompt(prompt string, skills []Skill) string {
+	if strings.HasPrefix(prompt, "/") {
+		cleared := prompt[1:]
+		for _, s := range skills {
+			if cleared == s.Name {
+				return strings.TrimSpace(string(s.Body))
+			}
+		}
+	}
+
+	return prompt
+}
+
 func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
 	var messages []openai.ChatCompletionMessageParamUnion
 
@@ -108,7 +124,7 @@ func BuildMessages(prompt string) []openai.ChatCompletionMessageParamUnion {
 		messages = append(messages, openai.SystemMessage(systemMsg.String()))
 	}
 
-	messages = append(messages, openai.UserMessage(prompt))
+	messages = append(messages, openai.UserMessage(parsePrompt(prompt, skills)))
 
 	return messages
 }
