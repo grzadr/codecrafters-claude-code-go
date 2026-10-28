@@ -527,7 +527,9 @@ func TestBuildMessages_SkillLocation(t *testing.T) {
 }
 
 func TestBuildMessages_SkillToolInstructions(t *testing.T) {
-	t.Run("system prompt lists skills", func(t *testing.T) {
+	const instructions = "\n\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns."
+
+	t.Run("system prompt lists skills then points to the Skill tool", func(t *testing.T) {
 		dir := t.TempDir()
 		writeFile(t, dir, ".claude/skills/banana/SKILL.md", bananaSkill)
 		writeFile(t, dir, ".claude/skills/cherry/SKILL.md", cherrySkill)
@@ -542,7 +544,7 @@ func TestBuildMessages_SkillToolInstructions(t *testing.T) {
 
 		want := "You have access to the following skills:\n\n" +
 			"- banana: Reports the deploy target for the banana service.\n" +
-			"- cherry: Reports the deploy target for the cherry service."
+			"- cherry: Reports the deploy target for the cherry service." + instructions
 		if strings.TrimSpace(system) != want {
 			t.Errorf("system message = %q, want %q", system, want)
 		}
