@@ -14,6 +14,7 @@ import (
 type Skill struct {
 	Name        string `yaml:"name"`
 	Description string `yaml:"description"`
+	Context     string `yaml:"context"`
 	Path        string
 	Body        []byte
 }
@@ -26,6 +27,10 @@ func (s *Skill) Msg() string {
 		s.Path,
 		strings.TrimSpace(string(s.Body)),
 	)
+}
+
+func (s Skill) Fork() bool {
+	return strings.ToLower(s.Context) == "fork"
 }
 
 const skillHeaderSeparator = "---\n"

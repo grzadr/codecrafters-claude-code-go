@@ -3,6 +3,7 @@ package chat
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/openai/openai-go/v3/option"
 
 	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
 func NewOpenAiClient() openai.Client {
@@ -28,7 +30,10 @@ func NewOpenAiClient() openai.Client {
 	return openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
 }
 
-const skillPrefix = "/"
+const (
+	skillPrefix = "/"
+	maxTurns    = 50
+)
 
 var argumentRegExp = regexp.MustCompile(`\$(?:ARGUMENTS\b(?:\[(\d+)\])?|(\d+))`)
 
@@ -119,4 +124,63 @@ func BuildMessages(
 	return messages
 }
 
-func SendCompletion(ctx context.Context)
+func SendCompletion(
+	ctx context.Context,
+	client openai.Client,
+	prompt []openai.ChatCompletionMessageParamUnion,
+	reg tools.Registry,
+	// ) ([]openai.ChatCompletionMessageParamUnion, error) {
+) (string, error) {
+	messages := prompt
+	for range maxTurns {
+		resp, err := client.Chat.Completions.New(ctx,
+			openai.ChatCompletionNewParams{
+				Model:    "anthropic/claude-haiku-4.5",
+				Messages: messages,
+				Tools:    reg.Params(),
+			},
+		)
+		if err != nil {
+			return "", fmt.Errorf("error: %v\n", err)
+		}
+		if len(resp.Choices) == 0 {
+			return "", fmt.Errorf("No choices in response")
+		}
+
+		msg := resp.Choices[0].Message
+
+		if len(msg.ToolCalls) == 0 {
+			return msg.Content, nil
+		}
+
+		messages = append(messages, msg.ToParam())
+
+		for _, tc := range msg.ToolCalls {
+			data, execErr := reg.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+
+			if errors.Is(execErr, tools.ErrContextFork) {
+				forked, forkErr := SendCompletion(
+					ctx,
+					client,
+					[]openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(data))},
+					reg,
+				)
+				if forkErr != nil {
+					execErr = forkErr
+				} else {
+					execErr = nil
+					data = []byte(forked)
+				}
+			}
+
+			if execErr != nil {
+				errMsg := fmt.Sprintf("error: %v\n", execErr)
+				fmt.Fprintln(os.Stderr, errMsg)
+				data = []byte(errMsg)
+			}
+			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
+		}
+	}
+
+	return "", fmt.Errorf("error: gave up after %d turns\n", maxTurns)
+}

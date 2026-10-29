@@ -3,10 +3,7 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
 	"os"
-
-	"github.com/openai/openai-go/v3"
 
 	chat "github.com/codecrafters-io/claude-code-starter-go/internal/chat"
 	skills "github.com/codecrafters-io/claude-code-starter-go/internal/skills"
@@ -46,49 +43,56 @@ func main() {
 	client := chat.NewOpenAiClient()
 
 	skillsRegistry := skills.InitSkillsRegistry(skillsPath)
-	toolsRegistry, toolsList := tools.InitTools(skillsRegistry)
+	toolsRegistry := tools.NewToolsRegistry(skillsRegistry)
 
 	messages := chat.BuildMessages(args.Prompt, skillsRegistry)
 
 	ctx := context.Background()
 
-	for range maxTurns {
-		resp, err := client.Chat.Completions.New(ctx,
-			openai.ChatCompletionNewParams{
-				Model:    "anthropic/claude-haiku-4.5",
-				Messages: messages,
-				Tools:    toolsList,
-			},
-		)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			exitFunc(1)
-			return
-		}
-		if len(resp.Choices) == 0 {
-			panic("No choices in response")
-		}
-
-		msg := resp.Choices[0].Message
-		messages = append(messages, msg.ToParam())
-
-		if len(msg.ToolCalls) == 0 {
-			_, _ = os.Stdout.WriteString(msg.Content)
-			return
-		}
-
-		for _, tc := range msg.ToolCalls {
-			data, execErr := toolsRegistry.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
-			if execErr != nil {
-				errMsg := fmt.Sprintf("error: %v\n", execErr)
-				fmt.Fprintln(os.Stderr, errMsg)
-				messages = append(messages, openai.ToolMessage(errMsg, tc.ID))
-				continue
-			}
-			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
-		}
+	msg, err := chat.SendCompletion(ctx, client, messages, toolsRegistry)
+	if err != nil {
+		panic(err)
 	}
 
-	fmt.Fprintf(os.Stderr, "error: gave up after %d turns\n", maxTurns)
-	exitFunc(1)
+	os.Stdout.WriteString(msg)
+
+	// for range maxTurns {
+	// 	resp, err := client.Chat.Completions.New(ctx,
+	// 		openai.ChatCompletionNewParams{
+	// 			Model:    "anthropic/claude-haiku-4.5",
+	// 			Messages: messages,
+	// 			Tools:    toolsList,
+	// 		},
+	// 	)
+	// 	if err != nil {
+	// 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	// 		exitFunc(1)
+	// 		return
+	// 	}
+	// 	if len(resp.Choices) == 0 {
+	// 		panic("No choices in response")
+	// 	}
+
+	// 	msg := resp.Choices[0].Message
+	// 	messages = append(messages, msg.ToParam())
+
+	// 	if len(msg.ToolCalls) == 0 {
+	// 		_, _ = os.Stdout.WriteString(msg.Content)
+	// 		return
+	// 	}
+
+	// 	for _, tc := range msg.ToolCalls {
+	// 		data, execErr := toolsRegistry.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+	// 		if execErr != nil {
+	// 			errMsg := fmt.Sprintf("error: %v\n", execErr)
+	// 			fmt.Fprintln(os.Stderr, errMsg)
+	// 			messages = append(messages, openai.ToolMessage(errMsg, tc.ID))
+	// 			continue
+	// 		}
+	// 		messages = append(messages, openai.ToolMessage(string(data), tc.ID))
+	// 	}
+	// }
+
+	// fmt.Fprintf(os.Stderr, "error: gave up after %d turns\n", maxTurns)
+	// exitFunc(1)
 }

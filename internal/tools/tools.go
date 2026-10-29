@@ -158,71 +158,6 @@ func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
 	return runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
 }
 
-type ToolFunc func(ctx context.Context, rawArgs string) ([]byte, error)
-
-type RegistryIndex map[string]ToolFunc
-
-type Registry struct {
-	Index RegistryIndex
-	List []Tool
-}
-
-func newToolsRegistry(s skills.SkillRegistry) Registry {
-	return Registry{
-		Index: RegistryIndex{
-		"Read":  ReadFunc,
-		"Write": WriteFunc,
-		"Bash":  BashFunc,
-		"Skill": func(_ context.Context, rawArgs string) ([]byte, error) {
-			var args struct {
-				Name string `json:"name"`
-				Args string `json:"args"`
-			}
-			if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-				return nil, err
-			}
-
-			s, ok := s[args.Name]
-
-			if !ok {
-				return nil, fmt.Errorf("unknown skill: %s", args.Name)
-			}
-
-			return []byte(s.Msg()), nil
-		},
-	},
-	List: []Tool{
-		newReadTool(),
-		newWriteTool(),
-		newBashTool(),
-		newSkillTool(),
-	},
-}
-}
-
-func (r Registry) Get(name string) (ToolFunc, bool) {
-	fn, ok := r.Index[name]
-
-	return fn, ok
-}
-
-func (r Registry) Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
-	fn, ok := r.Get(name)
-	if !ok {
-		return nil, fmt.Errorf("unknown tool: %s", name)
-	}
-
-	return fn(ctx, rawArgs)
-}
-
-func (r Registry) Params() []openai.ChatCompletionToolUnionParam {
-	out := make([]openai.ChatCompletionToolUnionParam, 0, len(r.List))
-	for _, tool := range r.List {
-		out = append(out, tool.ToParam())
-	}
-	return out
-}
-
 func newReadTool() Tool {
 	return Tool{
 		Type: toolTypeFunction,
@@ -311,13 +246,75 @@ func newSkillTool() Tool {
 	}
 }
 
-func InitTools(
-	s skills.SkillRegistry,
-) (Registry, []openai.ChatCompletionToolUnionParam) {
-	return newToolsRegistry(s), []openai.ChatCompletionToolUnionParam{
-		newReadTool().ToParam(),
-		newWriteTool().ToParam(),
-		newBashTool().ToParam(),
-		newSkillTool().ToParam(),
+type ToolFunc func(ctx context.Context, rawArgs string) ([]byte, error)
+
+type RegistryIndex map[string]ToolFunc
+
+type Registry struct {
+	Index RegistryIndex
+	List  []Tool
+}
+
+var ErrContextFork = errors.New("requires fork")
+
+func NewToolsRegistry(s skills.SkillRegistry) Registry {
+	return Registry{
+		Index: RegistryIndex{
+			"Read":  ReadFunc,
+			"Write": WriteFunc,
+			"Bash":  BashFunc,
+			"Skill": func(_ context.Context, rawArgs string) ([]byte, error) {
+				var args struct {
+					Name string `json:"name"`
+					Args string `json:"args"`
+				}
+				if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+					return nil, err
+				}
+
+				s, ok := s[args.Name]
+
+				if !ok {
+					return nil, fmt.Errorf("unknown skill: %s", args.Name)
+				}
+
+				var err error
+
+				if s.Fork() {
+					err = ErrContextFork
+				}
+
+				return []byte(s.Msg()), err
+			},
+		},
+		List: []Tool{
+			newReadTool(),
+			newWriteTool(),
+			newBashTool(),
+			newSkillTool(),
+		},
 	}
+}
+
+func (r Registry) Get(name string) (ToolFunc, bool) {
+	fn, ok := r.Index[name]
+
+	return fn, ok
+}
+
+func (r Registry) Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
+	fn, ok := r.Get(name)
+	if !ok {
+		return nil, fmt.Errorf("unknown tool: %s", name)
+	}
+
+	return fn(ctx, rawArgs)
+}
+
+func (r Registry) Params() []openai.ChatCompletionToolUnionParam {
+	out := make([]openai.ChatCompletionToolUnionParam, 0, len(r.List))
+	for _, tool := range r.List {
+		out = append(out, tool.ToParam())
+	}
+	return out
 }
