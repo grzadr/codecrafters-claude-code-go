@@ -209,19 +209,21 @@ func TestSendCompletion_ForkSkill(t *testing.T) {
 	reg := tools.NewToolsRegistry(skills.SkillRegistry{"apple": apple})
 	callSkill := toolCallReply("s1", "Skill", `{"name":"apple"}`)
 
-	t.Run("subagent answer becomes the final answer", func(t *testing.T) {
-		client, requests := fakeModel(t, sequence(callSkill, contentReply("blueberry")))
+	t.Run("subagent answer is sent back as the tool result", func(t *testing.T) {
+		client, requests := fakeModel(t, sequence(
+			callSkill,
+			contentReply("blueberry"),
+			contentReply("The on-call engineer is blueberry."),
+		))
 		msgs := []openai.ChatCompletionMessageParamUnion{openai.UserMessage("who is on call?")}
 
 		got, err := chat.SendCompletion(t.Context(), client, msgs, reg)
 		checkErr(t, err, "")
-		// Locked in: the subagent's answer is returned directly, it is not fed back to the main
-		// conversation as a tool result.
-		if got != "blueberry" {
-			t.Errorf("got %q, want %q", got, "blueberry")
+		if got != "The on-call engineer is blueberry." {
+			t.Errorf("got %q, want the main conversation's answer", got)
 		}
-		if len(*requests) != 2 {
-			t.Fatalf("got %d requests, want 2 (main, subagent)", len(*requests))
+		if len(*requests) != 3 {
+			t.Fatalf("got %d requests, want 3 (main, subagent, main)", len(*requests))
 		}
 
 		sub := (*requests)[1]
@@ -230,6 +232,10 @@ func TestSendCompletion_ForkSkill(t *testing.T) {
 		}
 		if prompt := sub.text(t, 0); prompt != apple.Msg() {
 			t.Errorf("subagent prompt = %q, want %q", prompt, apple.Msg())
+		}
+
+		if content := (*requests)[2].lastToolResult(t, "s1"); content != "blueberry" {
+			t.Errorf("tool result = %q, want %q", content, "blueberry")
 		}
 	})
 

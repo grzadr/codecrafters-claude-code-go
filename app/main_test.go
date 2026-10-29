@@ -318,13 +318,18 @@ func messageText(t *testing.T, raw json.RawMessage) string {
 }
 
 // forkModelReply answers like the tester's model: a conversation that starts with the forked
-// body is the subagent, anything else calls the Skill tool.
+// body is the subagent, a main conversation ending in a tool result gets the final answer, and
+// anything else calls the Skill tool.
 func forkModelReply(req chatRequest) string {
-	if len(req.Messages) > 0 && strings.Contains(string(req.Messages[0].Content), forkBody) {
+	switch {
+	case len(req.Messages) > 0 && strings.Contains(string(req.Messages[0].Content), forkBody):
 		return `{"choices":[{"message":{"role":"assistant","content":"blueberry"}}]}`
+	case len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool":
+		return `{"choices":[{"message":{"role":"assistant","content":"The on-call engineer is blueberry."}}]}`
+	default:
+		return `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function",` +
+			`"function":{"name":"Skill","arguments":"{\"name\":\"apple\"}"}}]}}]}`
 	}
-	return `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function",` +
-		`"function":{"name":"Skill","arguments":"{\"name\":\"apple\"}"}}]}}]}`
 }
 
 // runForkScenario runs main in a project with the forked apple skill and the grape decoy. It
@@ -376,8 +381,8 @@ func runForkScenario(t *testing.T) ([]chatRequest, string) {
 
 func TestMainFunc_ForkSkill(t *testing.T) {
 	requests, stdout := runForkScenario(t)
-	if len(requests) != 2 {
-		t.Fatalf("got %d requests, want 2 (main, subagent)", len(requests))
+	if len(requests) != 3 {
+		t.Fatalf("got %d requests, want 3 (main, subagent, main)", len(requests))
 	}
 
 	t.Run("subagent gets only the skill message", func(t *testing.T) {
@@ -392,17 +397,22 @@ func TestMainFunc_ForkSkill(t *testing.T) {
 		}
 	})
 
+	t.Run("subagent answer is the tool result", func(t *testing.T) {
+		if content := lastToolResult(t, requests[2], "s1"); content != "blueberry" {
+			t.Errorf("tool result = %q, want %q", content, "blueberry")
+		}
+	})
+
 	t.Run("skill body never enters the main conversation", func(t *testing.T) {
-		for _, m := range requests[0].Messages {
+		for _, m := range requests[2].Messages {
 			if strings.Contains(string(m.Content), forkBody) {
 				t.Errorf("main conversation carries the skill body in a %s message", m.Role)
 			}
 		}
 	})
 
-	// Locked in: the subagent's answer is printed directly as the final answer.
-	t.Run("subagent answer is printed", func(t *testing.T) {
-		if stdout != "blueberry" {
+	t.Run("main answer is printed", func(t *testing.T) {
+		if stdout != "The on-call engineer is blueberry." {
 			t.Errorf("stdout = %q", stdout)
 		}
 	})
