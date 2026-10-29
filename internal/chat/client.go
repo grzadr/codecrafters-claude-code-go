@@ -166,12 +166,11 @@ func SendCompletion(
 					[]openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(data))},
 					reg,
 				)
-				if forkErr != nil {
-					execErr = forkErr
-				} else {
-					execErr = nil
-					data = []byte(forked)
+				if forkErr == nil {
+					return forked, nil
 				}
+
+				execErr = forkErr
 			}
 
 			if execErr != nil {
