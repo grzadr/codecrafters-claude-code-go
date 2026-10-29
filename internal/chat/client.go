@@ -2,6 +2,7 @@ package chat
 
 import (
 	"cmp"
+	"context"
 	"fmt"
 	"maps"
 	"os"
@@ -117,3 +118,5 @@ func BuildMessages(
 
 	return messages
 }
+
+func SendCompletion(ctx context.Context)
