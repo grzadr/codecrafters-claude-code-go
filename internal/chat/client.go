@@ -27,10 +27,7 @@ func NewOpenAiClient() openai.Client {
 	return openai.NewClient(option.WithAPIKey(apiKey), option.WithBaseURL(baseURL))
 }
 
-const (
-	skillsPath  = ".claude/skills"
-	skillPrefix = "/"
-)
+const skillPrefix = "/"
 
 var argumentRegExp = regexp.MustCompile(`\$(?:ARGUMENTS\b(?:\[(\d+)\])?|(\d+))`)
 
@@ -108,7 +105,7 @@ func BuildMessages(
 
 		fmt.Fprint(
 			&systemMsg,
-			"\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.\n",
+			"\n\nIf a skill matches the user's request, call the Skill tool with its name and follow the instructions it returns.\n\n",
 		)
 
 		messages = append(messages, openai.SystemMessage(systemMsg.String()))

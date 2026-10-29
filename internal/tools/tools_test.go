@@ -204,7 +204,7 @@ func TestSkill(t *testing.T) {
 		{
 			name:    "unknown skill",
 			rawArgs: `{"name":"pear"}`,
-			want:    (&skills.Skill{}).Msg(),
+			wantErr: true,
 		},
 		{
 			name:    "invalid json",

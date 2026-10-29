@@ -174,7 +174,11 @@ func newToolsRegistry(s skills.SkillRegistry) Registry {
 				return nil, err
 			}
 
-			s := s[args.Name]
+			s, ok := s[args.Name]
+
+			if !ok {
+				return nil, fmt.Errorf("unknown skill: %s", args.Name)
+			}
 
 			return []byte(s.Msg()), nil
 		},

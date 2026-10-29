@@ -65,10 +65,6 @@ func InitSkillsRegistry(path string) SkillRegistry {
 		return nil
 	}
 
-	if len(entries) == 0 {
-		return nil
-	}
-
 	skills := make(SkillRegistry)
 
 	for _, entry := range entries {
