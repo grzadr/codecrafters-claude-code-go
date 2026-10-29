@@ -329,3 +329,135 @@ func lastToolResult(t *testing.T, req chatRequest, id string) string {
 	_ = json.Unmarshal(last.Content, &content)
 	return content
 }
+
+const forkSkill = "---\nname: apple\n" +
+	"description: Use this skill when the user asks about the on-call rotation.\n" +
+	"context: fork\n---\n\n" +
+	"Respond with exactly one word: blueberry\n"
+
+const forkBody = "Respond with exactly one word: blueberry"
+
+// messageText decodes a message content that was sent as a plain string.
+func messageText(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("content %s is not a plain string: %v", raw, err)
+	}
+	return s
+}
+
+// forkModelReply answers like the tester's model: a conversation that starts with the forked
+// body is the subagent, a main conversation ending in a tool result gets the final answer, and
+// anything else calls the Skill tool.
+func forkModelReply(req chatRequest) string {
+	switch {
+	case len(req.Messages) > 0 && strings.Contains(string(req.Messages[0].Content), forkBody):
+		return `{"choices":[{"message":{"role":"assistant","content":"blueberry"}}]}`
+	case len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool":
+		return `{"choices":[{"message":{"role":"assistant","content":"The on-call engineer is blueberry."}}]}`
+	default:
+		return `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function",` +
+			`"function":{"name":"Skill","arguments":"{\"name\":\"apple\"}"}}]}}]}`
+	}
+}
+
+// runForkScenario runs main in a project with the forked apple skill and the grape decoy. It
+// returns every request and what main printed to stdout.
+//
+//nolint:reassign // test overrides os.Args, os.Stdout and http.DefaultTransport
+func runForkScenario(t *testing.T) ([]chatRequest, string) {
+	t.Helper()
+	origArgs, origExit, origTransport, origStdout := os.Args, exitFunc, http.DefaultTransport, os.Stdout
+	t.Cleanup(func() {
+		os.Args, exitFunc, http.DefaultTransport, os.Stdout = origArgs, origExit, origTransport, origStdout
+	})
+
+	dir := t.TempDir()
+	for rel, content := range map[string]string{
+		".claude/skills/apple/SKILL.md": forkSkill,
+		".claude/skills/grape/SKILL.md": formatSkill,
+	} {
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+
+	os.Args = []string{"app", "-p", "Who is on the on-call rotation right now?"}
+	t.Setenv("OPENROUTER_API_KEY", "test")
+
+	stdout, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = stdout
+
+	var requests []chatRequest
+	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var req chatRequest
+		if decErr := json.NewDecoder(r.Body).Decode(&req); decErr != nil {
+			t.Errorf("decode request: %v", decErr)
+		}
+		requests = append(requests, req)
+		rec := httptest.NewRecorder()
+		rec.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(rec, forkModelReply(req))
+		return rec.Result(), nil
+	})
+
+	exited := 0
+	exitFunc = func(c int) { exited = c }
+	main()
+	if exited != 0 {
+		t.Fatalf("expected no exit, got %d", exited)
+	}
+
+	out, err := os.ReadFile(stdout.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return requests, string(out)
+}
+
+func TestMainFunc_ForkSkill(t *testing.T) {
+	requests, stdout := runForkScenario(t)
+	if len(requests) != 3 {
+		t.Fatalf("got %d requests, want 3 (main, subagent, main)", len(requests))
+	}
+
+	t.Run("subagent gets only the skill body", func(t *testing.T) {
+		sub := requests[1]
+		if len(sub.Messages) != 1 || sub.Messages[0].Role != "user" {
+			t.Fatalf("subagent messages = %+v, want one user message", sub.Messages)
+		}
+		if got := messageText(t, sub.Messages[0].Content); got != forkBody {
+			t.Errorf("subagent prompt = %q, want %q", got, forkBody)
+		}
+	})
+
+	t.Run("subagent answer is the tool result", func(t *testing.T) {
+		content := lastToolResult(t, requests[2], "s1")
+		if !strings.Contains(content, "blueberry") {
+			t.Errorf("tool result %q missing subagent answer", content)
+		}
+	})
+
+	t.Run("skill body never enters the main conversation", func(t *testing.T) {
+		for _, m := range requests[2].Messages {
+			if strings.Contains(string(m.Content), forkBody) {
+				t.Errorf("main conversation carries the skill body in a %s message", m.Role)
+			}
+		}
+	})
+
+	t.Run("main answer is printed", func(t *testing.T) {
+		if stdout != "The on-call engineer is blueberry." {
+			t.Errorf("stdout = %q", stdout)
+		}
+	})
+}
