@@ -159,6 +159,7 @@ func SendCompletion(
 			data, execErr := reg.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
 
 			if errors.Is(execErr, tools.ErrContextFork) {
+				fmt.Fprintf(os.Stderr, "forking %s: %s", tc.Function.Arguments, data)
 				forked, forkErr := SendCompletion(
 					ctx,
 					client,
