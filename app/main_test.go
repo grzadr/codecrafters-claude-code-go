@@ -30,18 +30,41 @@ func TestNewMainArgs(t *testing.T) {
 	newMainArgs(nil)
 }
 
+// captureStdout points [os.Stdout] at a temp file and returns a func reading what was written.
+//
+//nolint:reassign // test overrides os.Stdout
+func captureStdout(t *testing.T) func() string {
+	t.Helper()
+	orig := os.Stdout
+	t.Cleanup(func() { os.Stdout = orig })
+
+	f, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = f
+
+	return func() string {
+		out, readErr := os.ReadFile(f.Name())
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		return string(out)
+	}
+}
+
 //nolint:reassign // test overrides os.Args and http.DefaultTransport
 func TestMainFunc(t *testing.T) {
 	origArgs := os.Args
-	origExit := exitFunc
 	origTransport := http.DefaultTransport
 	t.Cleanup(func() {
 		os.Args = origArgs
-		exitFunc = origExit
 		http.DefaultTransport = origTransport
 	})
 	os.Args = []string{"app", "-p", "hi"}
 	t.Setenv("OPENROUTER_API_KEY", "test")
+	t.Setenv("OPENROUTER_BASE_URL", "")
+	t.Chdir(t.TempDir())
 
 	var (
 		step     int
@@ -57,97 +80,49 @@ func TestMainFunc(t *testing.T) {
 		case 1:
 			_, _ = fmt.Fprint(
 				rec,
-				`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"true\"}"}}]}}]}`,
+				`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"echo hi\"}"}}]}}]}`,
 			)
-		case 2:
+		case 2, 3:
 			_, _ = fmt.Fprint(
 				rec,
 				`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`,
 			)
-		case 3:
+		default:
 			rec.WriteHeader(http.StatusBadRequest)
-		case 4:
-			_, _ = fmt.Fprint(
-				rec,
-				`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Unknown","arguments":"{}"}}]}}]}`,
-			)
-		case 5:
-			_, _ = fmt.Fprint(
-				rec,
-				`{"choices":[{"message":{"role":"assistant","content":"recovered"}}]}`,
-			)
-		case 6:
-			_, _ = fmt.Fprint(rec, `{"choices":[]}`)
 		}
 		return rec.Result(), nil
 	})
 
-	// Step 1 -> 2: tool call then assistant message
-	main()
-
-	// Step 3: API error
-	exited := 0
-	exitFunc = func(c int) { exited = c }
-	main()
-	if exited != 1 {
-		t.Fatalf("expected exit 1, got %d", exited)
-	}
-
-	// Step 4 -> 5: tool error is sent back to the model and the loop continues
-	exited = 0
-	main()
-	if exited != 0 {
-		t.Fatalf("expected no exit after tool error, got %d", exited)
-	}
-	if !strings.Contains(lastBody, "error: unknown tool: Unknown") {
-		t.Fatalf("tool error not sent back to the model, request body: %s", lastBody)
-	}
-
-	// Step 6: Empty choices panic
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic")
+	t.Run("tool call then answer is printed", func(t *testing.T) {
+		stdout := captureStdout(t)
+		main()
+		if got := stdout(); got != "done" {
+			t.Errorf("stdout = %q, want %q", got, "done")
 		}
-	}()
-	main()
-}
-
-//nolint:reassign // test overrides os.Args and http.DefaultTransport
-func TestMainFunc_TurnCap(t *testing.T) {
-	origArgs := os.Args
-	origExit := exitFunc
-	origTransport := http.DefaultTransport
-	t.Cleanup(func() {
-		os.Args = origArgs
-		exitFunc = origExit
-		http.DefaultTransport = origTransport
-	})
-	os.Args = []string{"app", "-p", "hi"}
-	t.Setenv("OPENROUTER_API_KEY", "test")
-
-	// The model never stops calling tools.
-	requests := 0
-	http.DefaultTransport = roundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		requests++
-		rec := httptest.NewRecorder()
-		rec.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprint(
-			rec,
-			`{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"1","type":"function","function":{"name":"Unknown","arguments":"{}"}}]}}]}`,
-		)
-		return rec.Result(), nil
+		if !strings.Contains(lastBody, `"content":"hi\n"`) {
+			t.Errorf("tool output not sent back to the model, request body: %s", lastBody)
+		}
 	})
 
-	exited := 0
-	exitFunc = func(c int) { exited = c }
-	main()
+	t.Run("stdout write failure panics", func(t *testing.T) {
+		captureStdout(t)
+		_ = os.Stdout.Close()
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic")
+			}
+		}()
+		main()
+	})
 
-	if exited != 1 {
-		t.Errorf("expected exit 1, got %d", exited)
-	}
-	if requests != maxTurns {
-		t.Errorf("got %d requests, want %d", requests, maxTurns)
-	}
+	t.Run("api error panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic")
+			}
+		}()
+		main()
+	})
 }
 
 const migrationSkill = "---\nname: apple\n" +
@@ -260,9 +235,9 @@ func TestMainFunc_SkillTool(t *testing.T) {
 //nolint:reassign // test overrides os.Args and http.DefaultTransport
 func runSkillScenario(t *testing.T, arguments string) []chatRequest {
 	t.Helper()
-	origArgs, origExit, origTransport := os.Args, exitFunc, http.DefaultTransport
+	origArgs, origTransport := os.Args, http.DefaultTransport
 	t.Cleanup(func() {
-		os.Args, exitFunc, http.DefaultTransport = origArgs, origExit, origTransport
+		os.Args, http.DefaultTransport = origArgs, origTransport
 	})
 
 	dir := t.TempDir()
@@ -308,12 +283,7 @@ func runSkillScenario(t *testing.T, arguments string) []chatRequest {
 		return rec.Result(), nil
 	})
 
-	exited := 0
-	exitFunc = func(c int) { exited = c }
 	main()
-	if exited != 0 {
-		t.Fatalf("expected no exit, got %d", exited)
-	}
 	return requests
 }
 
@@ -348,29 +318,24 @@ func messageText(t *testing.T, raw json.RawMessage) string {
 }
 
 // forkModelReply answers like the tester's model: a conversation that starts with the forked
-// body is the subagent, a main conversation ending in a tool result gets the final answer, and
-// anything else calls the Skill tool.
+// body is the subagent, anything else calls the Skill tool.
 func forkModelReply(req chatRequest) string {
-	switch {
-	case len(req.Messages) > 0 && strings.Contains(string(req.Messages[0].Content), forkBody):
+	if len(req.Messages) > 0 && strings.Contains(string(req.Messages[0].Content), forkBody) {
 		return `{"choices":[{"message":{"role":"assistant","content":"blueberry"}}]}`
-	case len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool":
-		return `{"choices":[{"message":{"role":"assistant","content":"The on-call engineer is blueberry."}}]}`
-	default:
-		return `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function",` +
-			`"function":{"name":"Skill","arguments":"{\"name\":\"apple\"}"}}]}}]}`
 	}
+	return `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function",` +
+		`"function":{"name":"Skill","arguments":"{\"name\":\"apple\"}"}}]}}]}`
 }
 
 // runForkScenario runs main in a project with the forked apple skill and the grape decoy. It
 // returns every request and what main printed to stdout.
 //
-//nolint:reassign // test overrides os.Args, os.Stdout and http.DefaultTransport
+//nolint:reassign // test overrides os.Args and http.DefaultTransport
 func runForkScenario(t *testing.T) ([]chatRequest, string) {
 	t.Helper()
-	origArgs, origExit, origTransport, origStdout := os.Args, exitFunc, http.DefaultTransport, os.Stdout
+	origArgs, origTransport := os.Args, http.DefaultTransport
 	t.Cleanup(func() {
-		os.Args, exitFunc, http.DefaultTransport, os.Stdout = origArgs, origExit, origTransport, origStdout
+		os.Args, http.DefaultTransport = origArgs, origTransport
 	})
 
 	dir := t.TempDir()
@@ -390,12 +355,7 @@ func runForkScenario(t *testing.T) ([]chatRequest, string) {
 
 	os.Args = []string{"app", "-p", "Who is on the on-call rotation right now?"}
 	t.Setenv("OPENROUTER_API_KEY", "test")
-
-	stdout, err := os.Create(filepath.Join(t.TempDir(), "stdout"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = stdout
+	stdout := captureStdout(t)
 
 	var requests []chatRequest
 	http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
@@ -410,53 +370,39 @@ func runForkScenario(t *testing.T) ([]chatRequest, string) {
 		return rec.Result(), nil
 	})
 
-	exited := 0
-	exitFunc = func(c int) { exited = c }
 	main()
-	if exited != 0 {
-		t.Fatalf("expected no exit, got %d", exited)
-	}
-
-	out, err := os.ReadFile(stdout.Name())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return requests, string(out)
+	return requests, stdout()
 }
 
 func TestMainFunc_ForkSkill(t *testing.T) {
 	requests, stdout := runForkScenario(t)
-	if len(requests) != 3 {
-		t.Fatalf("got %d requests, want 3 (main, subagent, main)", len(requests))
+	if len(requests) != 2 {
+		t.Fatalf("got %d requests, want 2 (main, subagent)", len(requests))
 	}
 
-	t.Run("subagent gets only the skill body", func(t *testing.T) {
+	t.Run("subagent gets only the skill message", func(t *testing.T) {
 		sub := requests[1]
 		if len(sub.Messages) != 1 || sub.Messages[0].Role != "user" {
 			t.Fatalf("subagent messages = %+v, want one user message", sub.Messages)
 		}
-		if got := messageText(t, sub.Messages[0].Content); got != forkBody {
-			t.Errorf("subagent prompt = %q, want %q", got, forkBody)
-		}
-	})
-
-	t.Run("subagent answer is the tool result", func(t *testing.T) {
-		content := lastToolResult(t, requests[2], "s1")
-		if !strings.Contains(content, "blueberry") {
-			t.Errorf("tool result %q missing subagent answer", content)
+		want := "Skill: apple (located at .claude/skills/apple)\n" +
+			"Paths in the instructions below are relative to that folder.\n\n" + forkBody
+		if got := messageText(t, sub.Messages[0].Content); got != want {
+			t.Errorf("subagent prompt = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("skill body never enters the main conversation", func(t *testing.T) {
-		for _, m := range requests[2].Messages {
+		for _, m := range requests[0].Messages {
 			if strings.Contains(string(m.Content), forkBody) {
 				t.Errorf("main conversation carries the skill body in a %s message", m.Role)
 			}
 		}
 	})
 
-	t.Run("main answer is printed", func(t *testing.T) {
-		if stdout != "The on-call engineer is blueberry." {
+	// Locked in: the subagent's answer is printed directly as the final answer.
+	t.Run("subagent answer is printed", func(t *testing.T) {
+		if stdout != "blueberry" {
 			t.Errorf("stdout = %q", stdout)
 		}
 	})

@@ -197,3 +197,40 @@ func TestSkillMsg(t *testing.T) {
 		t.Errorf("Msg() = %q, want %q", got, want)
 	}
 }
+
+func TestSkillFork(t *testing.T) {
+	tests := []struct {
+		context string
+		want    bool
+	}{
+		{context: "", want: false},
+		{context: "fork", want: true},
+		{context: "FORK", want: true},   // locked in: comparison is case-insensitive
+		{context: " fork", want: false}, // locked in: surrounding whitespace is not trimmed
+		{context: "inline", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.context, func(t *testing.T) {
+			s := skills.Skill{Context: tt.context}
+			if got := s.Fork(); got != tt.want {
+				t.Errorf("Fork() with context %q = %v, want %v", tt.context, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInitSkillsRegistry_Context(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(
+		t,
+		dir,
+		"apple/SKILL.md",
+		"---\nname: apple\ndescription: d\ncontext: fork\n---\nbody\n",
+	)
+
+	got := skills.InitSkillsRegistry(dir)
+	if s := got["apple"]; s.Context != "fork" || !s.Fork() {
+		t.Errorf("apple context = %q, Fork() = %v, want %q and true", s.Context, s.Fork(), "fork")
+	}
+}

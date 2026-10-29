@@ -29,7 +29,7 @@ func (s *Skill) Msg() string {
 	)
 }
 
-func (s Skill) Fork() bool {
+func (s *Skill) Fork() bool {
 	return strings.ToLower(s.Context) == "fork"
 }
 

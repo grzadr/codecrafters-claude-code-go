@@ -141,10 +141,10 @@ func SendCompletion(
 			},
 		)
 		if err != nil {
-			return "", fmt.Errorf("error: %v\n", err)
+			return "", fmt.Errorf("error: %w", err)
 		}
 		if len(resp.Choices) == 0 {
-			return "", fmt.Errorf("No choices in response")
+			return "", errors.New("no choices in response")
 		}
 
 		msg := resp.Choices[0].Message
@@ -167,7 +167,8 @@ func SendCompletion(
 					reg,
 				)
 				if forkErr == nil {
-					return forked, nil
+					messages = append(messages, openai.ToolMessage(forked, tc.ID))
+					continue
 				}
 
 				execErr = forkErr
@@ -182,5 +183,5 @@ func SendCompletion(
 		}
 	}
 
-	return "", fmt.Errorf("error: gave up after %d turns\n", maxTurns)
+	return "", fmt.Errorf("error: gave up after %d turns", maxTurns)
 }

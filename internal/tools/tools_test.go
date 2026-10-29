@@ -22,7 +22,7 @@ func TestRead(t *testing.T) {
 		t.Fatalf("failed to write test file: %v", err)
 	}
 
-	reg, _ := tools.InitTools(nil)
+	reg := tools.NewToolsRegistry(nil)
 
 	tests := []struct {
 		name      string
@@ -70,7 +70,7 @@ func TestWrite(t *testing.T) {
 	filePath := filepath.Join(tmpDir, "output.txt")
 	content := "Hello from Write tool test!"
 
-	reg, _ := tools.InitTools(nil)
+	reg := tools.NewToolsRegistry(nil)
 
 	tests := []struct {
 		name    string
@@ -116,7 +116,7 @@ func TestWrite(t *testing.T) {
 }
 
 func TestBash(t *testing.T) {
-	reg, _ := tools.InitTools(nil)
+	reg := tools.NewToolsRegistry(nil)
 
 	tests := []struct {
 		name     string
@@ -183,7 +183,7 @@ func TestSkill(t *testing.T) {
 		Path:        ".claude/skills/apple",
 		Body:        []byte("\nRespond with exactly one word: blueberry\n"),
 	}
-	reg, _ := tools.InitTools(skills.SkillRegistry{"apple": apple})
+	reg := tools.NewToolsRegistry(skills.SkillRegistry{"apple": apple})
 
 	tests := []struct {
 		name    string
@@ -227,7 +227,7 @@ func TestSkill(t *testing.T) {
 }
 
 func TestExecute_UnknownTool(t *testing.T) {
-	reg, _ := tools.InitTools(nil)
+	reg := tools.NewToolsRegistry(nil)
 	_, err := reg.Execute(t.Context(), "NonExistentTool", "{}")
 	if err == nil {
 		t.Fatal("expected error for unknown tool, got nil")
@@ -242,9 +242,9 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 		Name string `json:"name"`
 	}
 
-	reg, _ := tools.InitTools(nil)
+	reg := tools.NewToolsRegistry(nil)
 	greetCalled := false
-	reg["Greet"] = func(ctx context.Context, rawArgs string) ([]byte, error) {
+	reg.Index["Greet"] = func(ctx context.Context, rawArgs string) ([]byte, error) {
 		if ctx == nil {
 			return nil, errors.New("expected non-nil context")
 		}
@@ -271,16 +271,63 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 	}
 }
 
-func TestInitTools(t *testing.T) {
-	_, toolsList := tools.InitTools(nil)
+func TestNewToolsRegistry(t *testing.T) {
+	reg := tools.NewToolsRegistry(nil)
 	wantNames := []string{"Read", "Write", "Bash", "Skill"}
-	if len(toolsList) != len(wantNames) {
-		t.Fatalf("got %d tools in toolsList, want %d", len(toolsList), len(wantNames))
-	}
-	for i, want := range wantNames {
-		if got := toolsList[i].OfFunction.Function.Name; got != want {
-			t.Errorf("toolsList[%d] name = %q, want %q", i, got, want)
+
+	t.Run("params advertise every tool in order", func(t *testing.T) {
+		params := reg.Params()
+		if len(params) != len(wantNames) {
+			t.Fatalf("got %d params, want %d", len(params), len(wantNames))
 		}
+		for i, want := range wantNames {
+			if got := params[i].OfFunction.Function.Name; got != want {
+				t.Errorf("params[%d] name = %q, want %q", i, got, want)
+			}
+		}
+	})
+
+	t.Run("every listed tool is executable", func(t *testing.T) {
+		for _, name := range wantNames {
+			if _, ok := reg.Get(name); !ok {
+				t.Errorf("Get(%q) not found", name)
+			}
+		}
+		if _, ok := reg.Get("Missing"); ok {
+			t.Error("Get(\"Missing\") found, want not found")
+		}
+	})
+
+	t.Run("skill parameters", func(t *testing.T) {
+		fn := reg.Params()[3].OfFunction.Function
+		got, err := json.Marshal(fn.Parameters)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"properties":{"args":{"description":"Optional arguments for the skill","type":"string"},` +
+			`"name":{"description":"The name of the skill to use","type":"string"}},` +
+			`"required":["name"],"type":"object"}`
+		if string(got) != want {
+			t.Errorf("Skill parameters = %s, want %s", got, want)
+		}
+	})
+}
+
+func TestSkill_Fork(t *testing.T) {
+	apple := skills.Skill{
+		Name:    "apple",
+		Context: "fork",
+		Path:    ".claude/skills/apple",
+		Body:    []byte("Respond with exactly one word: blueberry\n"),
+	}
+	reg := tools.NewToolsRegistry(skills.SkillRegistry{"apple": apple})
+
+	out, err := reg.Execute(t.Context(), "Skill", `{"name":"apple"}`)
+	if !errors.Is(err, tools.ErrContextFork) {
+		t.Fatalf("error = %v, want %v", err, tools.ErrContextFork)
+	}
+	if string(out) != apple.Msg() {
+		t.Errorf("got %q, want %q", out, apple.Msg())
 	}
 }
 
