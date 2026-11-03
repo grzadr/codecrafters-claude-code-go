@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
-	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 
 	"github.com/openai/openai-go/v3"
@@ -35,8 +33,6 @@ const (
 	maxTurns    = 50
 )
 
-var argumentRegExp = regexp.MustCompile(`\$(?:ARGUMENTS\b(?:\[(\d+)\])?|(\d+))`)
-
 func getSkillNames(prompt string, registry skills.SkillRegistry) ([]skills.Skill, []string) {
 	fields := strings.Fields(prompt)
 	found := make([]skills.Skill, 0, len(fields))
@@ -60,21 +56,7 @@ func parsePrompt(prompt string, skills skills.SkillRegistry) []string {
 
 	userPrompts := make([]string, 0, len(namesSkills))
 	for _, s := range namesSkills {
-		out := argumentRegExp.ReplaceAllStringFunc(s.Msg(), func(m string) string {
-			snum := strings.TrimRight(strings.TrimLeft(m, "$ARGUMENTS["), "]")
-			if snum == "" {
-				return strings.Join(args, " ")
-			}
-
-			num, err := strconv.Atoi(snum)
-			if err != nil || num >= len(args) {
-				return ""
-			}
-
-			return args[num]
-		})
-
-		userPrompts = append(userPrompts, out)
+		userPrompts = append(userPrompts, s.Msg(args...))
 	}
 
 	return userPrompts

@@ -6,9 +6,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
+)
+
+var subRegExp = regexp.MustCompile(
+	`\$\{CLAUDE_SKILL_DIR\}|\$ARGUMENTS(?:\[[^\]\s]*\]?|\w+)?|\$\d\w*`,
 )
 
 type Skill struct {
@@ -19,13 +25,48 @@ type Skill struct {
 	Body        string
 }
 
-func (s Skill) Msg() string {
+func lookupArg(args []string, idxStr, raw string, matched *bool) string {
+	num, err := strconv.ParseUint(idxStr, 10, 0)
+	if errors.Is(err, strconv.ErrSyntax) {
+		return raw
+	}
+
+	*matched = true
+	if err != nil || num >= uint64(len(args)) {
+		return ""
+	}
+
+	return args[num]
+}
+
+func (s Skill) Msg(args ...string) string {
+	var matched bool
+	body := subRegExp.ReplaceAllStringFunc(strings.TrimSpace(s.Body), func(m string) string {
+		switch {
+		case m == "${CLAUDE_SKILL_DIR}":
+			return s.Path
+		case m == "$ARGUMENTS":
+			matched = true
+			return strings.Join(args, " ")
+		case strings.HasPrefix(m, "$ARGUMENTS[") && strings.HasSuffix(m, "]"):
+			return lookupArg(args, m[len("$ARGUMENTS["):len(m)-1], m, &matched)
+		case !strings.HasPrefix(m, "$ARGUMENTS"):
+			return lookupArg(args, m[1:], m, &matched)
+		default:
+			return m
+		}
+	})
+
+	if !matched && len(args) > 0 {
+		body += "\n\nARGUMENTS: " + strings.Join(args, " ")
+	}
+
 	return fmt.Sprintf(
 		"Skill: %s (located at %s)\n"+
 			"Paths in the instructions below are relative to that folder.\n\n%s",
 		s.Name,
 		s.Path,
-		strings.TrimSpace(s.Body),
+		body,
 	)
 }
 

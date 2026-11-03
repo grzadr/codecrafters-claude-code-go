@@ -199,7 +199,7 @@ func TestSkill(t *testing.T) {
 		{
 			name:    "matching skill with optional args",
 			rawArgs: `{"name":"apple","args":"prod"}`,
-			want:    apple.Msg(),
+			want:    apple.Msg("prod"),
 		},
 		{
 			name:    "unknown skill",

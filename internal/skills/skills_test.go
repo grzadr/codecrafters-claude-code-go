@@ -187,11 +187,47 @@ func TestInitSkillsRegistry_PathIsFile(t *testing.T) {
 }
 
 func TestSkillMsg(t *testing.T) {
-	s := skills.Skill{Name: "apple", Path: "skills/fruit", Body: "\n  Do it.\n\n"}
-	want := "Skill: apple (located at skills/fruit)\n" +
-		"Paths in the instructions below are relative to that folder.\n\nDo it."
-	if got := s.Msg(); got != want {
-		t.Errorf("Msg() = %q, want %q", got, want)
+	const header = "Skill: apple (located at skills/fruit)\n" +
+		"Paths in the instructions below are relative to that folder.\n\n"
+
+	tests := []struct {
+		name string
+		body string
+		args []string
+		want string
+	}{
+		{
+			name: "trims body whitespace",
+			body: "\n  Do it.\n\n",
+			want: "Do it.",
+		},
+		{
+			name: "substitutes all placeholders and skill dir",
+			body: "${CLAUDE_SKILL_DIR}|$ARGUMENTS|$ARGUMENTS[1]|$0|$2",
+			args: []string{"a", "b"},
+			want: "skills/fruit|a b|b|a|",
+		},
+		{
+			name: "leaves invalid placeholders literal",
+			body: "$0 $ARGUMENTSX $ARGUMENTS[x] $ARGUMENTS[0 $0x $",
+			args: []string{"a"},
+			want: "a $ARGUMENTSX $ARGUMENTS[x] $ARGUMENTS[0 $0x $",
+		},
+		{
+			name: "appends arguments when no argument placeholder matched",
+			body: "Run ${CLAUDE_SKILL_DIR}/run.sh",
+			args: []string{"a", "b"},
+			want: "Run skills/fruit/run.sh\n\nARGUMENTS: a b",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := skills.Skill{Name: "apple", Path: "skills/fruit", Body: tt.body}
+			if got := s.Msg(tt.args...); got != header+tt.want {
+				t.Errorf("Msg() = %q, want %q", got, header+tt.want)
+			}
+		})
 	}
 }
 

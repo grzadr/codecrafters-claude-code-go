@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 
@@ -135,6 +136,7 @@ func bashFunc(ctx context.Context, args bashArgs) (Result, error) {
 
 type skillArgs struct {
 	Name string `json:"name"`
+	Args string `json:"args"`
 }
 
 type Registry struct {
@@ -154,7 +156,10 @@ func NewToolsRegistry(s skills.SkillRegistry) Registry {
 					return Result{}, fmt.Errorf("unknown skill: %s", args.Name)
 				}
 
-				return Result{Output: skill.Msg(), Fork: skill.Fork()}, nil
+				return Result{
+					Output: skill.Msg(strings.Fields(args.Args)...),
+					Fork:   skill.Fork(),
+				}, nil
 			}),
 		},
 		List: []openai.ChatCompletionToolUnionParam{

@@ -262,13 +262,21 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 
 func TestParsePrompt(t *testing.T) {
 	skills := skills.SkillRegistry{
-		"all":   {Name: "all", Body: "\n  $ARGUMENTS  \n"},
-		"pos":   {Name: "pos", Body: "$1 $0"},
-		"idx":   {Name: "idx", Body: "$ARGUMENTS[1] $ARGUMENTS[0]"},
-		"mix":   {Name: "mix", Body: "$0|$ARGUMENTS[1]|$ARGUMENTS|$0"},
-		"far":   {Name: "far", Body: "[$2][$ARGUMENTS[5]][$99999999999999999999]"},
-		"ten":   {Name: "ten", Body: "$10"},
-		"lit":   {Name: "lit", Body: "$ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $x $"},
+		"all": {Name: "all", Body: "\n  $ARGUMENTS  \n"},
+		"pos": {Name: "pos", Body: "$1 $0"},
+		"idx": {Name: "idx", Body: "$ARGUMENTS[1] $ARGUMENTS[0]"},
+		"mix": {Name: "mix", Body: "$0|$ARGUMENTS[1]|$ARGUMENTS|$0"},
+		"far": {Name: "far", Body: "[$2][$ARGUMENTS[5]][$99999999999999999999]"},
+		"ten": {Name: "ten", Body: "$10"},
+		"lit": {
+			Name: "lit",
+			Body: "$0 $ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $ARGUMENTS[0 $0x $x $",
+		},
+		"dir": {
+			Name: "dir",
+			Path: ".claude/skills/dir",
+			Body: "Run ${CLAUDE_SKILL_DIR}/run.sh",
+		},
 		"plain": {Name: "plain", Body: "no placeholders"},
 	}
 
@@ -293,11 +301,21 @@ func TestParsePrompt(t *testing.T) {
 		{
 			name:   "non-placeholders left literal",
 			prompt: "/lit a",
-			want:   "$ARGUMENTSX $ARGUMENTS_x a[x] $x $",
+			want:   "a $ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $ARGUMENTS[0 $0x $x $",
 		},
 		{
-			name:   "body without placeholders ignores arguments",
+			name:   "skill dir substitution and appended arguments",
+			prompt: "/dir a b",
+			want:   "Run .claude/skills/dir/run.sh\n\nARGUMENTS: a b",
+		},
+		{
+			name:   "body without placeholders appends arguments",
 			prompt: "/plain a b",
+			want:   "no placeholders\n\nARGUMENTS: a b",
+		},
+		{
+			name:   "body without placeholders and no arguments stays unchanged",
+			prompt: "/plain",
 			want:   "no placeholders",
 		},
 	}
