@@ -147,7 +147,7 @@ func SendCompletion(
 					ctx,
 					client,
 					[]openai.ChatCompletionMessageParamUnion{openai.UserMessage(res.Output)},
-					reg,
+					tools.NewToolsRegistry(nil),
 				)
 			}
 
@@ -159,5 +159,5 @@ func SendCompletion(
 		}
 	}
 
-	return "", fmt.Errorf("error: gave up after %d turns", maxTurns)
+	return "", fmt.Errorf("gave up after %d turns", maxTurns)
 }

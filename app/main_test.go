@@ -228,11 +228,11 @@ func TestMainFunc_SkillTool(t *testing.T) {
 	}
 }
 
-// runSkillScenario runs main in a project with the apple and grape skills. The fake model
-// calls Skill with the given arguments once, then answers "done". It returns every request.
+// setupSkillEnv chdirs into a temp dir populated with files and sets [os.Args], API key, and
+// cleanup for [os.Args] and [http.DefaultTransport].
 //
 //nolint:reassign // test overrides os.Args and http.DefaultTransport
-func runSkillScenario(t *testing.T, arguments string) []chatRequest {
+func setupSkillEnv(t *testing.T, prompt string, files map[string]string) {
 	t.Helper()
 	origArgs, origTransport := os.Args, http.DefaultTransport
 	t.Cleanup(func() {
@@ -240,10 +240,7 @@ func runSkillScenario(t *testing.T, arguments string) []chatRequest {
 	})
 
 	dir := t.TempDir()
-	for rel, content := range map[string]string{
-		".claude/skills/apple/SKILL.md": migrationSkill,
-		".claude/skills/grape/SKILL.md": formatSkill,
-	} {
+	for rel, content := range files {
 		path := filepath.Join(dir, rel)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -254,8 +251,20 @@ func runSkillScenario(t *testing.T, arguments string) []chatRequest {
 	}
 	t.Chdir(dir)
 
-	os.Args = []string{"app", "-p", "What is the database migration status?"}
+	os.Args = []string{"app", "-p", prompt}
 	t.Setenv("OPENROUTER_API_KEY", "test")
+}
+
+// runSkillScenario runs main in a project with the apple and grape skills. The fake model
+// calls Skill with the given arguments once, then answers "done". It returns every request.
+//
+//nolint:reassign // test overrides http.DefaultTransport
+func runSkillScenario(t *testing.T, arguments string) []chatRequest {
+	t.Helper()
+	setupSkillEnv(t, "What is the database migration status?", map[string]string{
+		".claude/skills/apple/SKILL.md": migrationSkill,
+		".claude/skills/grape/SKILL.md": formatSkill,
+	})
 
 	call, _ := json.Marshal(arguments)
 	var requests []chatRequest
@@ -334,31 +343,13 @@ func forkModelReply(req chatRequest) string {
 // runForkScenario runs main in a project with the forked apple skill and the grape decoy. It
 // returns every request and what main printed to stdout.
 //
-//nolint:reassign // test overrides os.Args and http.DefaultTransport
+//nolint:reassign // test overrides http.DefaultTransport
 func runForkScenario(t *testing.T) ([]chatRequest, string) {
 	t.Helper()
-	origArgs, origTransport := os.Args, http.DefaultTransport
-	t.Cleanup(func() {
-		os.Args, http.DefaultTransport = origArgs, origTransport
-	})
-
-	dir := t.TempDir()
-	for rel, content := range map[string]string{
+	setupSkillEnv(t, "Who is on the on-call rotation right now?", map[string]string{
 		".claude/skills/apple/SKILL.md": forkSkill,
 		".claude/skills/grape/SKILL.md": formatSkill,
-	} {
-		path := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Chdir(dir)
-
-	os.Args = []string{"app", "-p", "Who is on the on-call rotation right now?"}
-	t.Setenv("OPENROUTER_API_KEY", "test")
+	})
 	stdout := captureStdout(t)
 
 	var requests []chatRequest

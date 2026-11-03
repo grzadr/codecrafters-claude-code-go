@@ -45,31 +45,34 @@ type Result struct {
 	Fork   bool
 }
 
-type ReadArgs struct {
+type ToolFunc func(ctx context.Context, rawArgs string) (Result, error)
+
+func withArgs[T any](fn func(context.Context, T) (Result, error)) ToolFunc {
+	return func(ctx context.Context, rawArgs string) (Result, error) {
+		var args T
+		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
+			return Result{}, err
+		}
+
+		return fn(ctx, args)
+	}
+}
+
+type readArgs struct {
 	FilePath string `json:"file_path"`
 }
 
-func ReadFunc(_ context.Context, rawArgs string) (Result, error) {
-	var args ReadArgs
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return Result{}, err
-	}
-
+func readFunc(_ context.Context, args readArgs) (Result, error) {
 	b, err := os.ReadFile(args.FilePath)
 	return Result{Output: string(b)}, err
 }
 
-type WriteArgs struct {
+type writeArgs struct {
 	FilePath string `json:"file_path"`
 	Content  string `json:"content"`
 }
 
-func WriteFunc(_ context.Context, rawArgs string) (Result, error) {
-	var args WriteArgs
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return Result{}, err
-	}
-
+func writeFunc(_ context.Context, args writeArgs) (Result, error) {
 	return Result{}, os.WriteFile(args.FilePath, []byte(args.Content), 0o600)
 }
 
@@ -119,23 +122,20 @@ func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) (
 	return string(out), nil
 }
 
-type BashArgs struct {
+type bashArgs struct {
 	Command string `json:"command"`
 }
 
 const bashGracePeriod = 100 * time.Second
 
-func BashFunc(ctx context.Context, rawArgs string) (Result, error) {
-	var args BashArgs
-	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return Result{}, err
-	}
-
+func bashFunc(ctx context.Context, args bashArgs) (Result, error) {
 	out, err := runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
 	return Result{Output: out}, err
 }
 
-type ToolFunc func(ctx context.Context, rawArgs string) (Result, error)
+type skillArgs struct {
+	Name string `json:"name"`
+}
 
 type Registry struct {
 	Index map[string]ToolFunc
@@ -145,24 +145,17 @@ type Registry struct {
 func NewToolsRegistry(s skills.SkillRegistry) Registry {
 	return Registry{
 		Index: map[string]ToolFunc{
-			"Read":  ReadFunc,
-			"Write": WriteFunc,
-			"Bash":  BashFunc,
-			"Skill": func(_ context.Context, rawArgs string) (Result, error) {
-				var args struct {
-					Name string `json:"name"`
-				}
-				if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-					return Result{}, err
-				}
-
+			"Read":  withArgs(readFunc),
+			"Write": withArgs(writeFunc),
+			"Bash":  withArgs(bashFunc),
+			"Skill": withArgs(func(_ context.Context, args skillArgs) (Result, error) {
 				skill, ok := s[args.Name]
 				if !ok {
 					return Result{}, fmt.Errorf("unknown skill: %s", args.Name)
 				}
 
 				return Result{Output: skill.Msg(), Fork: skill.Fork()}, nil
-			},
+			}),
 		},
 		List: []openai.ChatCompletionToolUnionParam{
 			newTool("Read", "Read and return the contents of a file", map[string]string{

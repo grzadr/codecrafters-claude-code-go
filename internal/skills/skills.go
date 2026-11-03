@@ -19,7 +19,7 @@ type Skill struct {
 	Body        string
 }
 
-func (s *Skill) Msg() string {
+func (s Skill) Msg() string {
 	return fmt.Sprintf(
 		"Skill: %s (located at %s)\n"+
 			"Paths in the instructions below are relative to that folder.\n\n%s",
@@ -29,7 +29,7 @@ func (s *Skill) Msg() string {
 	)
 }
 
-func (s *Skill) Fork() bool {
+func (s Skill) Fork() bool {
 	return strings.EqualFold(s.Context, "fork")
 }
 
