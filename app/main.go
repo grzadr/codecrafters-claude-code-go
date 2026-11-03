@@ -5,52 +5,41 @@ import (
 	"flag"
 	"os"
 
-	chat "github.com/codecrafters-io/claude-code-starter-go/internal/chat"
-	skills "github.com/codecrafters-io/claude-code-starter-go/internal/skills"
-	tools "github.com/codecrafters-io/claude-code-starter-go/internal/tools"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/chat"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
+	"github.com/codecrafters-io/claude-code-starter-go/internal/tools"
 )
 
-const (
-	skillsPath = ".claude/skills"
-)
-
-type mainArgs struct {
-	Prompt string
-}
-
-func newMainArgs(args []string) mainArgs {
-	var parsed mainArgs
+func newMainArgs(args []string) string {
+	var prompt string
 
 	fs := flag.NewFlagSet("app", flag.ExitOnError)
-	fs.StringVar(&parsed.Prompt, "p", "", "Prompt to send to LLM")
+	fs.StringVar(&prompt, "p", "", "Prompt to send to LLM")
 	_ = fs.Parse(args)
 
-	if parsed.Prompt == "" {
+	if prompt == "" {
 		panic("Prompt must not be empty")
 	}
 
-	return parsed
+	return prompt
 }
 
 func main() {
-	args := newMainArgs(os.Args[1:])
+	prompt := newMainArgs(os.Args[1:])
 
 	client := chat.NewOpenAiClient()
 
-	skillsRegistry := skills.InitSkillsRegistry(skillsPath)
+	skillsRegistry := skills.InitSkillsRegistry(".claude/skills")
 	toolsRegistry := tools.NewToolsRegistry(skillsRegistry)
 
-	messages := chat.BuildMessages(args.Prompt, skillsRegistry)
+	messages := chat.BuildMessages(prompt, skillsRegistry)
 
-	ctx := context.Background()
-
-	msg, err := chat.SendCompletion(ctx, client, messages, toolsRegistry)
+	msg, err := chat.SendCompletion(context.Background(), client, messages, toolsRegistry)
 	if err != nil {
 		panic(err)
 	}
 
-	_, err = os.Stdout.WriteString(msg)
-	if err != nil {
+	if _, err = os.Stdout.WriteString(msg); err != nil {
 		panic(err)
 	}
 }

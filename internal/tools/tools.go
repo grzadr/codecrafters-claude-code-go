@@ -16,71 +16,47 @@ import (
 	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
 )
 
-type Property struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-}
-
-type Parameter struct {
-	Type       string              `json:"type"`
-	Properties map[string]Property `json:"properties"`
-	Required   []string            `json:"required"`
-}
-
-type Function struct {
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Parameters  Parameter `json:"parameters"`
-}
-
-type Tool struct {
-	Type     string   `json:"type"`
-	Function Function `json:"function"`
-}
-
-// ToParam converts the static Tool struct into the OpenAI SDK parameter type.
-func (t Tool) ToParam() openai.ChatCompletionToolUnionParam {
-	props := make(map[string]any, len(t.Function.Parameters.Properties))
-	for k, v := range t.Function.Parameters.Properties {
-		props[k] = map[string]any{
-			"type":        v.Type,
-			"description": v.Description,
+func newTool(
+	name, desc string,
+	props map[string]string,
+	required ...string,
+) openai.ChatCompletionToolUnionParam {
+	properties := make(map[string]any, len(props))
+	for k, d := range props {
+		properties[k] = map[string]any{
+			"type":        "string",
+			"description": d,
 		}
 	}
 
 	return openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-		Name:        t.Function.Name,
-		Description: openai.String(t.Function.Description),
+		Name:        name,
+		Description: openai.String(desc),
 		Parameters: shared.FunctionParameters{
-			"type":       t.Function.Parameters.Type,
-			"properties": props,
-			"required":   t.Function.Parameters.Required,
+			"type":       "object",
+			"properties": properties,
+			"required":   required,
 		},
 	})
 }
 
-const (
-	toolTypeFunction = "function"
-	paramTypeObject  = "object"
-	propTypeString   = "string"
-	propFilePath     = "file_path"
-)
+type Result struct {
+	Output string
+	Fork   bool
+}
 
 type ReadArgs struct {
 	FilePath string `json:"file_path"`
 }
 
-func ReadFunc(_ context.Context, rawArgs string) ([]byte, error) {
+func ReadFunc(_ context.Context, rawArgs string) (Result, error) {
 	var args ReadArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 
-	return os.ReadFile(args.FilePath)
-}
-
-func WriteStringToFile(filePath, content string) error {
-	return os.WriteFile(filePath, []byte(content), 0o600)
+	b, err := os.ReadFile(args.FilePath)
+	return Result{Output: string(b)}, err
 }
 
 type WriteArgs struct {
@@ -88,13 +64,13 @@ type WriteArgs struct {
 	Content  string `json:"content"`
 }
 
-func WriteFunc(_ context.Context, rawArgs string) ([]byte, error) {
+func WriteFunc(_ context.Context, rawArgs string) (Result, error) {
 	var args WriteArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 
-	return nil, WriteStringToFile(args.FilePath, args.Content)
+	return Result{}, os.WriteFile(args.FilePath, []byte(args.Content), 0o600)
 }
 
 type ProcessError struct {
@@ -110,9 +86,9 @@ func (e *ProcessError) Unwrap() error {
 	return e.Err
 }
 
-func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) ([]byte, error) {
+func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) (string, error) {
 	if len(args) == 0 {
-		return nil, errors.New("command arguments slice cannot be empty")
+		return "", errors.New("command arguments slice cannot be empty")
 	}
 
 	//nolint:gosec // G204: Bash tool intentionally executes user/LLM-provided commands
@@ -134,13 +110,13 @@ func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) (
 			code = exitErr.ExitCode()
 		}
 
-		return out, &ProcessError{
+		return string(out), &ProcessError{
 			Code: code,
 			Err:  err,
 		}
 	}
 
-	return out, nil
+	return string(out), nil
 }
 
 type BashArgs struct {
@@ -149,149 +125,60 @@ type BashArgs struct {
 
 const bashGracePeriod = 100 * time.Second
 
-func BashFunc(ctx context.Context, rawArgs string) ([]byte, error) {
+func BashFunc(ctx context.Context, rawArgs string) (Result, error) {
 	var args BashArgs
 	if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-		return nil, err
+		return Result{}, err
 	}
 
-	return runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
+	out, err := runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
+	return Result{Output: out}, err
 }
 
-func newReadTool() Tool {
-	return Tool{
-		Type: toolTypeFunction,
-		Function: Function{
-			Name:        "Read",
-			Description: "Read and return the contents of a file",
-			Parameters: Parameter{
-				Type: paramTypeObject,
-				Properties: map[string]Property{
-					propFilePath: {
-						Type:        propTypeString,
-						Description: "The path to the file to read",
-					},
-				},
-				Required: []string{propFilePath},
-			},
-		},
-	}
-}
-
-func newWriteTool() Tool {
-	return Tool{
-		Type: toolTypeFunction,
-		Function: Function{
-			Name:        "Write",
-			Description: "Write content to a file",
-			Parameters: Parameter{
-				Type: paramTypeObject,
-				Properties: map[string]Property{
-					propFilePath: {
-						Type:        propTypeString,
-						Description: "The path of the file to write to",
-					},
-					"content": {
-						Type:        propTypeString,
-						Description: "The content to write to the file",
-					},
-				},
-				Required: []string{propFilePath, "content"},
-			},
-		},
-	}
-}
-
-func newBashTool() Tool {
-	return Tool{
-		Type: toolTypeFunction,
-		Function: Function{
-			Name:        "Bash",
-			Description: "Execute a shell command",
-			Parameters: Parameter{
-				Type: paramTypeObject,
-				Properties: map[string]Property{
-					"command": {
-						Type:        propTypeString,
-						Description: "The command to execute",
-					},
-				},
-				Required: []string{"command"},
-			},
-		},
-	}
-}
-
-func newSkillTool() Tool {
-	return Tool{
-		Type: toolTypeFunction,
-		Function: Function{
-			Name:        "Skill",
-			Description: "Load a skill's instructions into the conversation",
-			Parameters: Parameter{
-				Type: paramTypeObject,
-				Properties: map[string]Property{
-					"name": {
-						Type:        propTypeString,
-						Description: "The name of the skill to use",
-					},
-					"args": {
-						Type:        propTypeString,
-						Description: "Optional arguments for the skill",
-					},
-				},
-				Required: []string{"name"},
-			},
-		},
-	}
-}
-
-type ToolFunc func(ctx context.Context, rawArgs string) ([]byte, error)
-
-type RegistryIndex map[string]ToolFunc
+type ToolFunc func(ctx context.Context, rawArgs string) (Result, error)
 
 type Registry struct {
-	Index RegistryIndex
-	List  []Tool
+	Index map[string]ToolFunc
+	List  []openai.ChatCompletionToolUnionParam
 }
-
-var ErrContextFork = errors.New("requires fork")
 
 func NewToolsRegistry(s skills.SkillRegistry) Registry {
 	return Registry{
-		Index: RegistryIndex{
+		Index: map[string]ToolFunc{
 			"Read":  ReadFunc,
 			"Write": WriteFunc,
 			"Bash":  BashFunc,
-			"Skill": func(_ context.Context, rawArgs string) ([]byte, error) {
+			"Skill": func(_ context.Context, rawArgs string) (Result, error) {
 				var args struct {
 					Name string `json:"name"`
-					Args string `json:"args"`
 				}
 				if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-					return nil, err
+					return Result{}, err
 				}
 
-				s, ok := s[args.Name]
-
+				skill, ok := s[args.Name]
 				if !ok {
-					return nil, fmt.Errorf("unknown skill: %s", args.Name)
+					return Result{}, fmt.Errorf("unknown skill: %s", args.Name)
 				}
 
-				var err error
-
-				if s.Fork() {
-					err = ErrContextFork
-				}
-
-				return []byte(s.Msg()), err
+				return Result{Output: skill.Msg(), Fork: skill.Fork()}, nil
 			},
 		},
-		List: []Tool{
-			newReadTool(),
-			newWriteTool(),
-			newBashTool(),
-			newSkillTool(),
+		List: []openai.ChatCompletionToolUnionParam{
+			newTool("Read", "Read and return the contents of a file", map[string]string{
+				"file_path": "The path to the file to read",
+			}, "file_path"),
+			newTool("Write", "Write content to a file", map[string]string{
+				"file_path": "The path of the file to write to",
+				"content":   "The content to write to the file",
+			}, "file_path", "content"),
+			newTool("Bash", "Execute a shell command", map[string]string{
+				"command": "The command to execute",
+			}, "command"),
+			newTool("Skill", "Load a skill's instructions into the conversation", map[string]string{
+				"name": "The name of the skill to use",
+				"args": "Optional arguments for the skill",
+			}, "name"),
 		},
 	}
 }
@@ -302,19 +189,15 @@ func (r Registry) Get(name string) (ToolFunc, bool) {
 	return fn, ok
 }
 
-func (r Registry) Execute(ctx context.Context, name, rawArgs string) ([]byte, error) {
+func (r Registry) Execute(ctx context.Context, name, rawArgs string) (Result, error) {
 	fn, ok := r.Get(name)
 	if !ok {
-		return nil, fmt.Errorf("unknown tool: %s", name)
+		return Result{}, fmt.Errorf("unknown tool: %s", name)
 	}
 
 	return fn(ctx, rawArgs)
 }
 
 func (r Registry) Params() []openai.ChatCompletionToolUnionParam {
-	out := make([]openai.ChatCompletionToolUnionParam, 0, len(r.List))
-	for _, tool := range r.List {
-		out = append(out, tool.ToParam())
-	}
-	return out
+	return r.List
 }

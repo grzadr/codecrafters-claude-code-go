@@ -204,7 +204,7 @@ func TestSendCompletion_ForkSkill(t *testing.T) {
 		Name:    "apple",
 		Context: "fork",
 		Path:    ".claude/skills/apple",
-		Body:    []byte("\nRespond with exactly one word: blueberry\n"),
+		Body:    "\nRespond with exactly one word: blueberry\n",
 	}
 	reg := tools.NewToolsRegistry(skills.SkillRegistry{"apple": apple})
 	callSkill := toolCallReply("s1", "Skill", `{"name":"apple"}`)

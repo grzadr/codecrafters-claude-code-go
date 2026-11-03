@@ -17,9 +17,8 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestNewMainArgs(t *testing.T) {
-	args := newMainArgs([]string{"-p", "hi"})
-	if args.Prompt != "hi" {
-		t.Fatalf("got %q, want hi", args.Prompt)
+	if got := newMainArgs([]string{"-p", "hi"}); got != "hi" {
+		t.Fatalf("got %q, want hi", got)
 	}
 
 	defer func() {

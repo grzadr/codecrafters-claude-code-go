@@ -1,7 +1,6 @@
 package skills_test
 
 import (
-	"bytes"
 	"maps"
 	"os"
 	"path/filepath"
@@ -38,21 +37,21 @@ description: Runs the grape test suite and reports failures.
 Run the tests.
 `
 
-// skillEqual compares skills treating nil and empty Content as equal.
+// skillEqual compares skills ignoring the runtime directory Path.
 func skillEqual(a, b skills.Skill) bool {
-	return a.Name == b.Name && a.Description == b.Description && bytes.Equal(a.Body, b.Body)
+	return a.Name == b.Name && a.Description == b.Description && a.Body == b.Body
 }
 
 func TestInitSkillsRegistry(t *testing.T) {
 	apple := skills.Skill{
 		Name:        "apple",
 		Description: "Deploys the apple service to production.",
-		Body:        []byte("\nRun the deploy script and report the version that was deployed.\n"),
+		Body:        "\nRun the deploy script and report the version that was deployed.\n",
 	}
 	grape := skills.Skill{
 		Name:        "grape",
 		Description: "Runs the grape test suite and reports failures.",
-		Body:        []byte("\nRun the tests.\n"),
+		Body:        "\nRun the tests.\n",
 	}
 
 	tests := []struct {
@@ -111,9 +110,7 @@ description: should never be read
 				{
 					Name:        "apple",
 					Description: "Deploys the apple service to production.",
-					Body: []byte(
-						"\nBody text.\n\n---\nname: evil\ndescription: should never be read\n",
-					),
+					Body:        "\nBody text.\n\n---\nname: evil\ndescription: should never be read\n",
 				},
 			},
 		},
@@ -190,7 +187,7 @@ func TestInitSkillsRegistry_PathIsFile(t *testing.T) {
 }
 
 func TestSkillMsg(t *testing.T) {
-	s := skills.Skill{Name: "apple", Path: "skills/fruit", Body: []byte("\n  Do it.\n\n")}
+	s := skills.Skill{Name: "apple", Path: "skills/fruit", Body: "\n  Do it.\n\n"}
 	want := "Skill: apple (located at skills/fruit)\n" +
 		"Paths in the instructions below are relative to that folder.\n\nDo it."
 	if got := s.Msg(); got != want {

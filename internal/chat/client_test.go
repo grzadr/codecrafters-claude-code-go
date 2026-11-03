@@ -262,14 +262,14 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 
 func TestParsePrompt(t *testing.T) {
 	skills := skills.SkillRegistry{
-		"all":   {Name: "all", Body: []byte("\n  $ARGUMENTS  \n")},
-		"pos":   {Name: "pos", Body: []byte("$1 $0")},
-		"idx":   {Name: "idx", Body: []byte("$ARGUMENTS[1] $ARGUMENTS[0]")},
-		"mix":   {Name: "mix", Body: []byte("$0|$ARGUMENTS[1]|$ARGUMENTS|$0")},
-		"far":   {Name: "far", Body: []byte("[$2][$ARGUMENTS[5]][$99999999999999999999]")},
-		"ten":   {Name: "ten", Body: []byte("$10")},
-		"lit":   {Name: "lit", Body: []byte("$ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $x $")},
-		"plain": {Name: "plain", Body: []byte("no placeholders")},
+		"all":   {Name: "all", Body: "\n  $ARGUMENTS  \n"},
+		"pos":   {Name: "pos", Body: "$1 $0"},
+		"idx":   {Name: "idx", Body: "$ARGUMENTS[1] $ARGUMENTS[0]"},
+		"mix":   {Name: "mix", Body: "$0|$ARGUMENTS[1]|$ARGUMENTS|$0"},
+		"far":   {Name: "far", Body: "[$2][$ARGUMENTS[5]][$99999999999999999999]"},
+		"ten":   {Name: "ten", Body: "$10"},
+		"lit":   {Name: "lit", Body: "$ARGUMENTSX $ARGUMENTS_x $ARGUMENTS[x] $x $"},
+		"plain": {Name: "plain", Body: "no placeholders"},
 	}
 
 	tests := []struct {

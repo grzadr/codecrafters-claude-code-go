@@ -16,7 +16,7 @@ type Skill struct {
 	Description string `yaml:"description"`
 	Context     string `yaml:"context"`
 	Path        string
-	Body        []byte
+	Body        string
 }
 
 func (s *Skill) Msg() string {
@@ -25,18 +25,16 @@ func (s *Skill) Msg() string {
 			"Paths in the instructions below are relative to that folder.\n\n%s",
 		s.Name,
 		s.Path,
-		strings.TrimSpace(string(s.Body)),
+		strings.TrimSpace(s.Body),
 	)
 }
 
 func (s *Skill) Fork() bool {
-	return strings.ToLower(s.Context) == "fork"
+	return strings.EqualFold(s.Context, "fork")
 }
 
-const skillHeaderSeparator = "---\n"
-
 func newSkill(path string, content []byte) (Skill, error) {
-	sep := []byte(skillHeaderSeparator)
+	sep := []byte("---\n")
 	content, found := bytes.CutPrefix(content, sep)
 	if !found {
 		return Skill{}, errors.New("skill description not prefixed with `---\n`")
@@ -53,7 +51,7 @@ func newSkill(path string, content []byte) (Skill, error) {
 	}
 
 	s.Path = path
-	s.Body = body
+	s.Body = string(body)
 
 	return s, nil
 }
@@ -77,7 +75,8 @@ func InitSkillsRegistry(path string) SkillRegistry {
 			continue
 		}
 
-		mdPath := filepath.Join(path, entry.Name(), "SKILL.md")
+		skillDir := filepath.Join(path, entry.Name())
+		mdPath := filepath.Join(skillDir, "SKILL.md")
 
 		content, readErr := os.ReadFile(mdPath)
 		if readErr != nil {
@@ -85,7 +84,7 @@ func InitSkillsRegistry(path string) SkillRegistry {
 			continue
 		}
 
-		skill, parseErr := newSkill(filepath.Join(path, entry.Name()), content)
+		skill, parseErr := newSkill(skillDir, content)
 		if parseErr != nil {
 			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", mdPath, parseErr)
 			continue

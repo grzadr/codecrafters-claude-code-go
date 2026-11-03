@@ -6,6 +6,6 @@ import (
 )
 
 // RunCommand exports the unexported runCommand function for testing.
-func RunCommand(ctx context.Context, args []string, gracePeriod time.Duration) ([]byte, error) {
+func RunCommand(ctx context.Context, args []string, gracePeriod time.Duration) (string, error) {
 	return runCommand(ctx, args, gracePeriod)
 }

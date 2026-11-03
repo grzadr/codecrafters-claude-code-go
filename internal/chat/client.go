@@ -39,48 +39,34 @@ var argumentRegExp = regexp.MustCompile(`\$(?:ARGUMENTS\b(?:\[(\d+)\])?|(\d+))`)
 
 func getSkillNames(prompt string, registry skills.SkillRegistry) ([]skills.Skill, []string) {
 	fields := strings.Fields(prompt)
-	last := 0
 	found := make([]skills.Skill, 0, len(fields))
-	for l, f := range fields {
-		if !strings.HasPrefix(f, skillPrefix) || len(f) == 1 {
-			break
-		}
-		skill, ok := registry[f[1:]]
-		if !ok {
-			break
+	for i, f := range fields {
+		name, hasPrefix := strings.CutPrefix(f, skillPrefix)
+		skill, ok := registry[name]
+		if !hasPrefix || !ok {
+			return found, fields[i:]
 		}
 		found = append(found, skill)
-		last = l + 1
 	}
 
-	args := fields[last:]
-
-	return found, args
+	return found, nil
 }
 
 func parsePrompt(prompt string, skills skills.SkillRegistry) []string {
 	namesSkills, args := getSkillNames(prompt, skills)
-
 	if len(namesSkills) == 0 {
 		return []string{prompt}
 	}
 
 	userPrompts := make([]string, 0, len(namesSkills))
-
 	for _, s := range namesSkills {
-		body := s.Msg()
-
-		out := argumentRegExp.ReplaceAllStringFunc(body, func(m string) string {
-			sub := argumentRegExp.FindStringSubmatch(m)
-
-			snum := sub[1] + sub[2]
-
+		out := argumentRegExp.ReplaceAllStringFunc(s.Msg(), func(m string) string {
+			snum := strings.TrimRight(strings.TrimLeft(m, "$ARGUMENTS["), "]")
 			if snum == "" {
 				return strings.Join(args, " ")
 			}
 
 			num, err := strconv.Atoi(snum)
-
 			if err != nil || num >= len(args) {
 				return ""
 			}
@@ -127,21 +113,20 @@ func BuildMessages(
 func SendCompletion(
 	ctx context.Context,
 	client openai.Client,
-	prompt []openai.ChatCompletionMessageParamUnion,
+	messages []openai.ChatCompletionMessageParamUnion,
 	reg tools.Registry,
-	// ) ([]openai.ChatCompletionMessageParamUnion, error) {
 ) (string, error) {
-	messages := prompt
+	toolsParams := reg.Params()
 	for range maxTurns {
 		resp, err := client.Chat.Completions.New(ctx,
 			openai.ChatCompletionNewParams{
 				Model:    "anthropic/claude-haiku-4.5",
 				Messages: messages,
-				Tools:    reg.Params(),
+				Tools:    toolsParams,
 			},
 		)
 		if err != nil {
-			return "", fmt.Errorf("error: %w", err)
+			return "", fmt.Errorf("chat completion: %w", err)
 		}
 		if len(resp.Choices) == 0 {
 			return "", errors.New("no choices in response")
@@ -156,30 +141,21 @@ func SendCompletion(
 		messages = append(messages, msg.ToParam())
 
 		for _, tc := range msg.ToolCalls {
-			data, execErr := reg.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
-
-			if errors.Is(execErr, tools.ErrContextFork) {
-				fmt.Fprintf(os.Stderr, "forking %s: %s", tc.Function.Arguments, data)
-				forked, forkErr := SendCompletion(
+			res, execErr := reg.Execute(ctx, tc.Function.Name, tc.Function.Arguments)
+			if execErr == nil && res.Fork {
+				res.Output, execErr = SendCompletion(
 					ctx,
 					client,
-					[]openai.ChatCompletionMessageParamUnion{openai.UserMessage(string(data))},
+					[]openai.ChatCompletionMessageParamUnion{openai.UserMessage(res.Output)},
 					reg,
 				)
-				if forkErr == nil {
-					messages = append(messages, openai.ToolMessage(forked, tc.ID))
-					continue
-				}
-
-				execErr = forkErr
 			}
 
 			if execErr != nil {
-				errMsg := fmt.Sprintf("error: %v\n", execErr)
-				fmt.Fprintln(os.Stderr, errMsg)
-				data = []byte(errMsg)
+				res.Output = fmt.Sprintf("error: %v\n", execErr)
+				fmt.Fprintln(os.Stderr, res.Output)
 			}
-			messages = append(messages, openai.ToolMessage(string(data), tc.ID))
+			messages = append(messages, openai.ToolMessage(res.Output, tc.ID))
 		}
 	}
 

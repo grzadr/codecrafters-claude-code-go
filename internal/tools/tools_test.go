@@ -51,15 +51,15 @@ func TestRead(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := reg.Execute(t.Context(), "Read", tt.rawArgs)
+			res, err := reg.Execute(t.Context(), "Read", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Read) error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if tt.targetErr != nil && !errors.Is(err, tt.targetErr) {
 				t.Errorf("expected error %v, got %v", tt.targetErr, err)
 			}
-			if string(out) != tt.want {
-				t.Errorf("got %q, want %q", string(out), tt.want)
+			if res.Output != tt.want {
+				t.Errorf("got %q, want %q", res.Output, tt.want)
 			}
 		})
 	}
@@ -95,13 +95,13 @@ func TestWrite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := reg.Execute(t.Context(), "Write", tt.rawArgs)
+			res, err := reg.Execute(t.Context(), "Write", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Write) error = %v, wantErr %v", err, tt.wantErr)
 			}
 			if !tt.wantErr {
-				if len(out) != 0 {
-					t.Errorf("expected empty output, got %q", string(out))
+				if res.Output != "" {
+					t.Errorf("expected empty output, got %q", res.Output)
 				}
 				data, readErr := os.ReadFile(filePath)
 				if readErr != nil {
@@ -151,7 +151,7 @@ func TestBash(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := reg.Execute(t.Context(), "Bash", tt.rawArgs)
+			res, err := reg.Execute(t.Context(), "Bash", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Bash) error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -159,7 +159,7 @@ func TestBash(t *testing.T) {
 			if ok && procErr.Code != tt.wantCode {
 				t.Errorf("got exit code %d, want %d", procErr.Code, tt.wantCode)
 			}
-			if got := strings.TrimSpace(string(out)); !tt.wantErr && got != tt.want {
+			if got := strings.TrimSpace(res.Output); !tt.wantErr && got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
@@ -181,7 +181,7 @@ func TestSkill(t *testing.T) {
 		Name:        "apple",
 		Description: "Use this skill when the user asks for the database migration status.",
 		Path:        ".claude/skills/apple",
-		Body:        []byte("\nRespond with exactly one word: blueberry\n"),
+		Body:        "\nRespond with exactly one word: blueberry\n",
 	}
 	reg := tools.NewToolsRegistry(skills.SkillRegistry{"apple": apple})
 
@@ -215,12 +215,12 @@ func TestSkill(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			out, err := reg.Execute(t.Context(), "Skill", tt.rawArgs)
+			res, err := reg.Execute(t.Context(), "Skill", tt.rawArgs)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("Execute(Skill) error = %v, wantErr %v", err, tt.wantErr)
 			}
-			if !tt.wantErr && string(out) != tt.want {
-				t.Errorf("got %q, want %q", string(out), tt.want)
+			if !tt.wantErr && (res.Output != tt.want || res.Fork) {
+				t.Errorf("got (%q, fork=%v), want (%q, fork=false)", res.Output, res.Fork, tt.want)
 			}
 		})
 	}
@@ -244,19 +244,19 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 
 	reg := tools.NewToolsRegistry(nil)
 	greetCalled := false
-	reg.Index["Greet"] = func(ctx context.Context, rawArgs string) ([]byte, error) {
+	reg.Index["Greet"] = func(ctx context.Context, rawArgs string) (tools.Result, error) {
 		if ctx == nil {
-			return nil, errors.New("expected non-nil context")
+			return tools.Result{}, errors.New("expected non-nil context")
 		}
 		var args GreetArgs
 		if err := json.Unmarshal([]byte(rawArgs), &args); err != nil {
-			return nil, err
+			return tools.Result{}, err
 		}
 		if args.Name != "Claude" {
-			return nil, errors.New("unexpected name")
+			return tools.Result{}, errors.New("unexpected name")
 		}
 		greetCalled = true
-		return []byte("Hello, Claude!"), nil
+		return tools.Result{Output: "Hello, Claude!"}, nil
 	}
 
 	res, err := reg.Execute(t.Context(), "Greet", `{"name":"Claude"}`)
@@ -266,8 +266,8 @@ func TestToolsRegistry_RegisterCustomTool(t *testing.T) {
 	if !greetCalled {
 		t.Fatal("expected custom tool to be called")
 	}
-	if string(res) != "Hello, Claude!" {
-		t.Errorf("expected %q, got %q", "Hello, Claude!", string(res))
+	if res.Output != "Hello, Claude!" {
+		t.Errorf("expected %q, got %q", "Hello, Claude!", res.Output)
 	}
 }
 
@@ -318,16 +318,19 @@ func TestSkill_Fork(t *testing.T) {
 		Name:    "apple",
 		Context: "fork",
 		Path:    ".claude/skills/apple",
-		Body:    []byte("Respond with exactly one word: blueberry\n"),
+		Body:    "Respond with exactly one word: blueberry\n",
 	}
 	reg := tools.NewToolsRegistry(skills.SkillRegistry{"apple": apple})
 
-	out, err := reg.Execute(t.Context(), "Skill", `{"name":"apple"}`)
-	if !errors.Is(err, tools.ErrContextFork) {
-		t.Fatalf("error = %v, want %v", err, tools.ErrContextFork)
+	res, err := reg.Execute(t.Context(), "Skill", `{"name":"apple"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if string(out) != apple.Msg() {
-		t.Errorf("got %q, want %q", out, apple.Msg())
+	if !res.Fork {
+		t.Error("Fork = false, want true")
+	}
+	if res.Output != apple.Msg() {
+		t.Errorf("got %q, want %q", res.Output, apple.Msg())
 	}
 }
 
