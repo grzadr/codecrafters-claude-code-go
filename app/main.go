@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/codecrafters-io/claude-code-starter-go/internal/chat"
 	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
@@ -34,7 +36,10 @@ func main() {
 
 	messages := chat.BuildMessages(prompt, skillsRegistry)
 
-	msg, err := chat.SendCompletion(context.Background(), client, messages, toolsRegistry)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	msg, err := chat.SendCompletion(ctx, client, messages, toolsRegistry)
 	if err != nil {
 		panic(err)
 	}
