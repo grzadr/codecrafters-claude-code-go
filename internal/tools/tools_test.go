@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -115,6 +117,82 @@ func TestWrite(t *testing.T) {
 	}
 }
 
+func assertWriteError(t *testing.T, err error, wantErr string) {
+	t.Helper()
+	switch {
+	case wantErr == "" && err != nil:
+		t.Fatalf("unexpected error: %v", err)
+	case wantErr != "" && (err == nil || err.Error() != wantErr):
+		t.Fatalf("error = %v, want %q", err, wantErr)
+	}
+}
+
+func TestWrite_ContentArgument(t *testing.T) {
+	reg := tools.NewToolsRegistry(nil)
+
+	tests := []struct {
+		name     string
+		args     string // %s is replaced by the target file path
+		existing bool   // the target file starts with "old"
+		wantErr  string
+		wantFile string
+	}{
+		{
+			name:     "missing content key is an error and keeps the file",
+			args:     `{"file_path":"%s"}`,
+			existing: true,
+			wantErr:  `missing required argument "content"`,
+			wantFile: "old",
+		},
+		{
+			name:     "misnamed contents key is an error and keeps the file",
+			args:     `{"file_path":"%s","contents":"new"}`,
+			existing: true,
+			wantErr:  `missing required argument "content"`,
+			wantFile: "old",
+		},
+		{
+			name:     "explicit empty content creates an empty file",
+			args:     `{"file_path":"%s","content":""}`,
+			wantFile: "",
+		},
+		{
+			name:     "missing file_path key is an error and keeps the file",
+			args:     `{"content":"new"}`,
+			existing: true,
+			wantErr:  `missing required argument "file_path"`,
+			wantFile: "old",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "file.txt")
+			if tt.existing {
+				if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			raw := tt.args
+			if strings.Contains(raw, "%s") {
+				raw = fmt.Sprintf(raw, path)
+			}
+
+			_, err := reg.Execute(t.Context(), "Write", raw)
+			assertWriteError(t, err, tt.wantErr)
+
+			data, readErr := os.ReadFile(path)
+			if readErr != nil {
+				t.Fatalf("read %s: %v", path, readErr)
+			}
+			if string(data) != tt.wantFile {
+				t.Errorf("file content = %q, want %q", data, tt.wantFile)
+			}
+		})
+	}
+}
+
 func TestBash(t *testing.T) {
 	reg := tools.NewToolsRegistry(nil)
 
@@ -176,6 +254,85 @@ func TestBash(t *testing.T) {
 	})
 }
 
+func TestBash_Environment(t *testing.T) {
+	t.Run("runs bash", func(t *testing.T) {
+		// Bashisms only work in bash, and $BASH names the binary that runs the command.
+		res, err := tools.NewToolsRegistry(nil).Execute(
+			t.Context(),
+			"Bash",
+			`{"command":"[[ -d / ]] && echo {1..2} ${BASH##*/}"}`,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v (output %q)", err, res.Output)
+		}
+		if res.Output != "1 2 bash\n" {
+			t.Errorf("got %q, want %q", res.Output, "1 2 bash\n")
+		}
+	})
+
+	t.Run("falls back to sh", func(t *testing.T) {
+		sh, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skipf("sh not on PATH: %v", err)
+		}
+		dir := t.TempDir()
+		if err = os.Symlink(sh, filepath.Join(dir, "sh")); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", dir)
+
+		res, err := tools.NewToolsRegistry(nil).
+			Execute(t.Context(), "Bash", `{"command":"echo ok"}`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v (output %q)", err, res.Output)
+		}
+		if res.Output != "ok\n" {
+			t.Errorf("got %q, want %q", res.Output, "ok\n")
+		}
+	})
+
+	t.Run("api key is not passed to the command", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test-key")
+
+		res, err := tools.NewToolsRegistry(nil).Execute(
+			t.Context(),
+			"Bash",
+			`{"command":"printenv OPENROUTER_API_KEY; echo done"}`,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v (output %q)", err, res.Output)
+		}
+		if res.Output != "done\n" {
+			t.Errorf("got %q, want %q (the key leaked into the child)", res.Output, "done\n")
+		}
+	})
+}
+
+func TestBash_Timeout(t *testing.T) {
+	t.Run("command timeout keeps the output so far", func(t *testing.T) {
+		res, err := tools.BashFunc(t.Context(), "echo started; sleep 5", 100*time.Millisecond)
+		if err == nil || err.Error() != "command timed out after 100ms" {
+			t.Fatalf("error = %v, want %q", err, "command timed out after 100ms")
+		}
+		if res.Output != "started\n" {
+			t.Errorf("output = %q, want %q", res.Output, "started\n")
+		}
+	})
+
+	t.Run("parent deadline is not a command timeout", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+		defer cancel()
+
+		_, err := tools.BashFunc(ctx, "sleep 5", time.Minute)
+		if err == nil {
+			t.Fatal("expected an error after the parent deadline, got nil")
+		}
+		if strings.Contains(err.Error(), "command timed out") {
+			t.Errorf("error = %v, want a non-timeout error", err)
+		}
+	})
+}
+
 func TestSkill(t *testing.T) {
 	apple := skills.Skill{
 		Name:        "apple",
@@ -194,12 +351,19 @@ func TestSkill(t *testing.T) {
 		{
 			name:    "matching skill",
 			rawArgs: `{"name":"apple"}`,
-			want:    apple.Msg(),
+			want:    apple.Msg(""),
 		},
 		{
 			name:    "matching skill with optional args",
 			rawArgs: `{"name":"apple","args":"prod"}`,
 			want:    apple.Msg("prod"),
+		},
+		{
+			name:    "args are passed verbatim",
+			rawArgs: `{"name":"apple","args":"a\n  b"}`,
+			want: "Skill: apple (located at .claude/skills/apple)\n" +
+				"Paths in the instructions below are relative to that folder.\n\n" +
+				"Respond with exactly one word: blueberry\n\nARGUMENTS: a\n  b",
 		},
 		{
 			name:    "unknown skill",
@@ -329,8 +493,8 @@ func TestSkill_Fork(t *testing.T) {
 	if !res.Fork {
 		t.Error("Fork = false, want true")
 	}
-	if res.Output != apple.Msg() {
-		t.Errorf("got %q, want %q", res.Output, apple.Msg())
+	if res.Output != apple.Msg("") {
+		t.Errorf("got %q, want %q", res.Output, apple.Msg(""))
 	}
 }
 
@@ -374,6 +538,38 @@ func TestRunCommand(t *testing.T) {
 		}
 		if procErr.Code != -1 {
 			t.Errorf("expected exit code -1, got %d", procErr.Code)
+		}
+	})
+
+	t.Run("cancel stops the shell's children", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		time.AfterFunc(100*time.Millisecond, cancel)
+
+		start := time.Now()
+		_, err := tools.RunCommand(ctx, []string{"sh", "-c", "sleep 30; true"}, 30*time.Second)
+		if err == nil {
+			t.Fatal("expected error on canceled context, got nil")
+		}
+		if elapsed := time.Since(start); elapsed > 5*time.Second {
+			t.Errorf("returned after %v, want under 5s", elapsed)
+		}
+	})
+
+	t.Run("background child does not fail a successful command", func(t *testing.T) {
+		start := time.Now()
+		out, err := tools.RunCommand(
+			t.Context(),
+			[]string{"sh", "-c", "sleep 5 & echo started"},
+			time.Second,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out != "started\n" {
+			t.Errorf("got %q, want %q", out, "started\n")
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("returned after %v, want under 2s", elapsed)
 		}
 	})
 }

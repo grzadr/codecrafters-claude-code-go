@@ -1,12 +1,18 @@
 package chat_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -170,6 +176,58 @@ func TestSendCompletion(t *testing.T) {
 			wantErr:      "gave up after 50 turns",
 			wantRequests: 50,
 		},
+		{
+			name: "failing command keeps its output and appends the error",
+			script: sequence(
+				toolCallReply("t1", "Bash", `{"command":"echo out; echo err >&2; exit 3"}`),
+				contentReply("done"),
+			),
+			want:         "done",
+			wantRequests: 2,
+			wantTool:     "out\nerr\nerror: command exited with code 3: exit status 3\n",
+		},
+		{
+			name: "refusal is an error",
+			script: sequence(reply{
+				body: `{"choices":[{"message":{"role":"assistant","content":"","refusal":"no"}}]}`,
+			}),
+			wantErr:      "model refused: no",
+			wantRequests: 1,
+		},
+		{
+			name: "empty reply is an error",
+			script: sequence(reply{
+				body: `{"choices":[{"finish_reason":"length","message":{"role":"assistant","content":""}}]}`,
+			}),
+			wantErr:      `empty reply (finish_reason "length")`,
+			wantRequests: 1,
+		},
+		{
+			name: "array content prints only the text parts",
+			script: sequence(reply{
+				body: `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":[` +
+					`{"type":"reasoning","text":"thinking"},` +
+					`{"type":"text","text":"Verdict: OK\n"},` +
+					`{"type":"text","text":"- detail"}]}}]}`,
+			}),
+			want:         "Verdict: OK\n- detail",
+			wantRequests: 1,
+		},
+		{
+			name: "array content without text parts is an empty reply",
+			script: sequence(reply{
+				body: `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":[` +
+					`{"type":"reasoning","text":"thinking"}]}}]}`,
+			}),
+			wantErr:      `empty reply (finish_reason "stop")`,
+			wantRequests: 1,
+		},
+		{
+			name:         "string content that looks like an array is kept verbatim",
+			script:       sequence(contentReply(`[{"type":"text","text":"x"}]`)),
+			want:         `[{"type":"text","text":"x"}]`,
+			wantRequests: 1,
+		},
 	}
 
 	for _, tt := range tests {
@@ -230,8 +288,8 @@ func TestSendCompletion_ForkSkill(t *testing.T) {
 		if len(sub.Messages) != 1 || sub.Messages[0].Role != "user" {
 			t.Fatalf("subagent messages = %+v, want one user message", sub.Messages)
 		}
-		if prompt := sub.text(t, 0); prompt != apple.Msg() {
-			t.Errorf("subagent prompt = %q, want %q", prompt, apple.Msg())
+		if prompt := sub.text(t, 0); prompt != apple.Msg("") {
+			t.Errorf("subagent prompt = %q, want %q", prompt, apple.Msg(""))
 		}
 
 		if content := (*requests)[2].lastToolResult(t, "s1"); content != "blueberry" {
@@ -265,5 +323,114 @@ func TestSendCompletion_ForkSkill(t *testing.T) {
 		) {
 			t.Errorf("tool result = %q, want the subagent error", content)
 		}
+	})
+}
+
+func TestSendCompletion_CancelStopsQueuedToolCalls(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "queued.txt")
+	writeArgs, err := json.Marshal(map[string]string{"file_path": path, "content": "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One assistant turn with two tool calls: a slow Bash, then a Write queued behind it.
+	body := fmt.Sprintf(
+		`{"choices":[{"message":{"role":"assistant","tool_calls":[`+
+			`{"id":"t1","type":"function","function":{"name":"Bash","arguments":%q}},`+
+			`{"id":"t2","type":"function","function":{"name":"Write","arguments":%q}}]}}]}`,
+		`{"command":"sleep 2"}`, writeArgs,
+	)
+	client, requests := fakeModel(t, sequence(reply{body: body}, contentReply("done")))
+	msgs := []openai.ChatCompletionMessageParamUnion{openai.UserMessage("hi")}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+
+	_, err = chat.SendCompletion(ctx, client, msgs, tools.NewToolsRegistry(nil))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("queued Write ran after cancel (stat error: %v)", statErr)
+	}
+	if len(*requests) != 1 {
+		t.Errorf("got %d requests, want 1", len(*requests))
+	}
+}
+
+// userTexts returns the content of every user message after the leading system message, failing
+// on any other role.
+func userTexts(t *testing.T, msgs []openai.ChatCompletionMessageParamUnion) []string {
+	t.Helper()
+	if len(msgs) == 0 || msgs[0].OfSystem == nil {
+		t.Fatalf("first message is not the system message: %+v", msgs)
+	}
+	var got []string
+	for _, m := range msgs[1:] {
+		if m.OfUser == nil {
+			t.Fatalf("non-user message after the system message: %+v", m)
+		}
+		got = append(got, m.OfUser.Content.OfString.Value)
+	}
+	return got
+}
+
+func TestBuildMessages_SlashForkSkill(t *testing.T) {
+	apple := skills.Skill{
+		Name:        "apple",
+		Description: "Reports the on-call engineer.",
+		Context:     "fork",
+		Path:        ".claude/skills/apple",
+		Body:        "\nRespond with exactly one word: blueberry\n",
+	}
+	grape := skills.Skill{
+		Name:        "grape",
+		Description: "Inline helper.",
+		Path:        ".claude/skills/grape",
+		Body:        "Echo $ARGUMENTS",
+	}
+	reg := skills.SkillRegistry{"apple": apple, "grape": grape}
+	const forked = "Skill apple ran in a subagent and returned:\n\nblueberry"
+
+	t.Run("subagent gets only the skill body and its answer is the message", func(t *testing.T) {
+		client, requests := fakeModel(t, sequence(contentReply("blueberry")))
+
+		msgs, err := chat.BuildMessages(t.Context(), client, "/apple prod", reg)
+		checkErr(t, err, "")
+		if len(*requests) != 1 {
+			t.Fatalf("got %d requests, want 1 (the subagent)", len(*requests))
+		}
+		sub := (*requests)[0]
+		if len(sub.Messages) != 1 || sub.Messages[0].Role != "user" {
+			t.Fatalf("subagent messages = %+v, want one user message", sub.Messages)
+		}
+		if prompt := sub.text(t, 0); prompt != apple.Msg("prod") {
+			t.Errorf("subagent prompt = %q, want %q", prompt, apple.Msg("prod"))
+		}
+		if got := userTexts(t, msgs); !slices.Equal(got, []string{forked}) {
+			t.Errorf("user messages = %q, want [%q]", got, forked)
+		}
+	})
+
+	t.Run("stacked with an inline skill forks only the fork skill", func(t *testing.T) {
+		client, requests := fakeModel(t, sequence(contentReply("blueberry")))
+
+		msgs, err := chat.BuildMessages(t.Context(), client, "/grape /apple x", reg)
+		checkErr(t, err, "")
+		if len(*requests) != 1 {
+			t.Fatalf("got %d requests, want 1 (the subagent)", len(*requests))
+		}
+		want := []string{grape.Msg("x"), forked}
+		if got := userTexts(t, msgs); !slices.Equal(got, want) {
+			t.Errorf("user messages = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("subagent failure is an error", func(t *testing.T) {
+		client, _ := fakeModel(t, sequence(reply{status: http.StatusBadRequest, body: `{}`}))
+
+		_, err := chat.BuildMessages(t.Context(), client, "/apple", reg)
+		checkErr(t, err, "skill apple: ")
+		checkErr(t, err, "400 Bad Request")
 	})
 }

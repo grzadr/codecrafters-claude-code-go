@@ -2,6 +2,7 @@ package skills
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -39,7 +40,9 @@ func lookupArg(args []string, idxStr, raw string, matched *bool) string {
 	return args[num]
 }
 
-func (s Skill) Msg(args ...string) string {
+func (s Skill) Msg(raw string) string {
+	raw = strings.TrimSpace(raw)
+	fields := strings.Fields(raw)
 	var matched bool
 	body := subRegExp.ReplaceAllStringFunc(strings.TrimSpace(s.Body), func(m string) string {
 		switch {
@@ -47,18 +50,18 @@ func (s Skill) Msg(args ...string) string {
 			return s.Path
 		case m == "$ARGUMENTS":
 			matched = true
-			return strings.Join(args, " ")
+			return raw
 		case strings.HasPrefix(m, "$ARGUMENTS[") && strings.HasSuffix(m, "]"):
-			return lookupArg(args, m[len("$ARGUMENTS["):len(m)-1], m, &matched)
+			return lookupArg(fields, m[len("$ARGUMENTS["):len(m)-1], m, &matched)
 		case !strings.HasPrefix(m, "$ARGUMENTS"):
-			return lookupArg(args, m[1:], m, &matched)
+			return lookupArg(fields, m[1:], m, &matched)
 		default:
 			return m
 		}
 	})
 
-	if !matched && len(args) > 0 {
-		body += "\n\nARGUMENTS: " + strings.Join(args, " ")
+	if !matched && raw != "" {
+		body += "\n\nARGUMENTS: " + raw
 	}
 
 	return fmt.Sprintf(
@@ -75,13 +78,19 @@ func (s Skill) Fork() bool {
 }
 
 func newSkill(path string, content []byte) (Skill, error) {
+	b := bytes.TrimPrefix(content, []byte("\xEF\xBB\xBF"))
+	b = bytes.ReplaceAll(b, []byte("\r\n"), []byte("\n"))
+	if !bytes.HasSuffix(b, []byte("\n")) {
+		b = append(b, '\n')
+	}
+
 	sep := []byte("---\n")
-	content, found := bytes.CutPrefix(content, sep)
+	cut, found := bytes.CutPrefix(b, sep)
 	if !found {
 		return Skill{}, errors.New("skill description not prefixed with `---\n`")
 	}
 
-	header, body, found := bytes.Cut(content, sep)
+	header, body, found := bytes.Cut(append([]byte("\n"), cut...), []byte("\n---\n"))
 	if !found {
 		return Skill{}, errors.New("skill description never closed")
 	}
@@ -91,6 +100,7 @@ func newSkill(path string, content []byte) (Skill, error) {
 		return Skill{}, err
 	}
 
+	s.Name = cmp.Or(s.Name, filepath.Base(path))
 	s.Path = path
 	s.Body = string(body)
 
@@ -112,11 +122,11 @@ func InitSkillsRegistry(path string) SkillRegistry {
 	skills := make(SkillRegistry)
 
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		skillDir := filepath.Join(path, entry.Name())
+		if fi, statErr := os.Stat(skillDir); statErr != nil || !fi.IsDir() {
 			continue
 		}
 
-		skillDir := filepath.Join(path, entry.Name())
 		mdPath := filepath.Join(skillDir, "SKILL.md")
 
 		content, readErr := os.ReadFile(mdPath)
@@ -128,6 +138,17 @@ func InitSkillsRegistry(path string) SkillRegistry {
 		skill, parseErr := newSkill(skillDir, content)
 		if parseErr != nil {
 			fmt.Fprintf(os.Stderr, "error loading skill %s: %v\n", mdPath, parseErr)
+			continue
+		}
+
+		if prev, dup := skills[skill.Name]; dup {
+			fmt.Fprintf(
+				os.Stderr,
+				"duplicate skill %q in %s, keeping %s\n",
+				skill.Name,
+				skillDir,
+				prev.Path,
+			)
 			continue
 		}
 

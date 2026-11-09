@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openai/openai-go/v3"
+
 	"github.com/codecrafters-io/claude-code-starter-go/internal/chat"
 	"github.com/codecrafters-io/claude-code-starter-go/internal/skills"
 )
@@ -45,24 +47,41 @@ func stripSkillHeader(msg string) string {
 	return msg
 }
 
+// buildMessages calls [chat.BuildMessages] without a model, which is enough for skills that do
+// not fork, and fails the test on error.
+func buildMessages(
+	t *testing.T,
+	prompt string,
+	reg skills.SkillRegistry,
+) []openai.ChatCompletionMessageParamUnion {
+	t.Helper()
+	msgs, err := chat.BuildMessages(t.Context(), openai.Client{}, prompt, reg)
+	if err != nil {
+		t.Fatalf("BuildMessages(%q) error: %v", prompt, err)
+	}
+	return msgs
+}
+
 func TestNewOpenAiClient(t *testing.T) {
-	t.Run("missing api key panics", func(t *testing.T) {
+	t.Run("missing api key is an error", func(t *testing.T) {
 		t.Setenv("OPENROUTER_API_KEY", "")
-		defer func() {
-			if recover() == nil {
-				t.Fatal("expected panic")
-			}
-		}()
-		chat.NewOpenAiClient()
+		_, err := chat.NewOpenAiClient()
+		if err == nil || err.Error() != "OPENROUTER_API_KEY is not set" {
+			t.Fatalf("error = %v, want %q", err, "OPENROUTER_API_KEY is not set")
+		}
 	})
 
 	t.Run("default and custom base url", func(t *testing.T) {
 		t.Setenv("OPENROUTER_API_KEY", "test-key")
 		t.Setenv("OPENROUTER_BASE_URL", "")
-		_ = chat.NewOpenAiClient()
+		if _, err := chat.NewOpenAiClient(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 
 		t.Setenv("OPENROUTER_BASE_URL", "http://localhost:8080")
-		_ = chat.NewOpenAiClient()
+		if _, err := chat.NewOpenAiClient(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	})
 }
 
@@ -154,7 +173,7 @@ func TestBuildMessages_Arguments(t *testing.T) {
 			t.Chdir(dir)
 
 			reg := skills.InitSkillsRegistry(".claude/skills")
-			msgs := chat.BuildMessages(tt.prompt, reg)
+			msgs := buildMessages(t, tt.prompt, reg)
 			if got := msgs[len(msgs)-1].OfUser.Content.OfString.Value; got != tt.want {
 				t.Errorf("user message = %q, want %q", got, tt.want)
 			}
@@ -164,7 +183,7 @@ func TestBuildMessages_Arguments(t *testing.T) {
 
 func TestBuildMessages(t *testing.T) {
 	t.Run("without skills", func(t *testing.T) {
-		msgs := chat.BuildMessages("hello", nil)
+		msgs := buildMessages(t, "hello", nil)
 		if len(msgs) != 1 {
 			t.Fatalf("got %d messages, want 1", len(msgs))
 		}
@@ -178,7 +197,7 @@ func TestBuildMessages(t *testing.T) {
 		writeFile(t, dir, ".claude/skills/apple/SKILL.md", appleSkill)
 		t.Chdir(dir)
 		reg := skills.InitSkillsRegistry(".claude/skills")
-		msgs := chat.BuildMessages("hello", reg)
+		msgs := buildMessages(t, "hello", reg)
 		if len(msgs) != 2 {
 			t.Fatalf("got %d messages, want 2", len(msgs))
 		}
@@ -246,7 +265,7 @@ func TestBuildMessages_SlashCommand(t *testing.T) {
 			t.Chdir(dir)
 
 			reg := skills.InitSkillsRegistry(".claude/skills")
-			msgs := chat.BuildMessages(tt.prompt, reg)
+			msgs := buildMessages(t, tt.prompt, reg)
 			if len(msgs) != 2 {
 				t.Fatalf("got %d messages, want 2", len(msgs))
 			}
@@ -290,7 +309,24 @@ func TestParsePrompt(t *testing.T) {
 		{name: "bare slash", prompt: "/", want: "/"},
 		{name: "slash with only whitespace", prompt: "/ \t ", want: "/ \t "},
 		{name: "full arguments with trimmed body", prompt: "/all 4127", want: "4127"},
-		{name: "arguments whitespace collapsed", prompt: "/all  a\t b  ", want: "a b"},
+		{
+			name:   "arguments kept verbatim, outer whitespace trimmed",
+			prompt: "/all  a\t b  ",
+			want:   "a\t b",
+		},
+		{
+			name:   "newlines in arguments are kept",
+			prompt: "/all line1\n  line2",
+			want:   "line1\n  line2",
+		},
+		{
+			name:   "positional split on any whitespace",
+			prompt: "/pos mango\n\tpear",
+			want:   "pear mango",
+		},
+		// Locked in: whitespace before the first slash command is skipped.
+		{name: "leading whitespace before slash command", prompt: " \n/all a", want: "a"},
+		{name: "newline right after the skill name", prompt: "/all\nnext", want: "next"},
 		{name: "shorthand positional", prompt: "/pos mango pear", want: "pear mango"},
 		{name: "indexed positional", prompt: "/idx mango pear", want: "pear mango"},
 		{name: "mixed and repeated", prompt: "/mix a b", want: "a|b|a b|a"},
@@ -410,9 +446,14 @@ func TestBuildMessages_StackedSkills(t *testing.T) {
 			want:   []string{apple + "1", apple + "1"},
 		},
 		{
-			name:   "whitespace between stacked skills collapsed",
+			name:   "whitespace between stacked skills skipped, arguments kept verbatim",
 			prompt: "/apple \t /grape   x  y",
-			want:   []string{apple + "x y", grape + "x y"},
+			want:   []string{apple + "x  y", grape + "x  y"},
+		},
+		{
+			name:   "stacked skills on separate lines keep multi-line arguments",
+			prompt: "/apple\n/grape\nline1\n  line2",
+			want:   []string{apple + "line1\n  line2", grape + "line1\n  line2"},
 		},
 		{
 			name:   "unknown first skill sends raw prompt",
@@ -430,7 +471,7 @@ func TestBuildMessages_StackedSkills(t *testing.T) {
 			t.Chdir(dir)
 
 			reg := skills.InitSkillsRegistry(".claude/skills")
-			msgs := chat.BuildMessages(tt.prompt, reg)
+			msgs := buildMessages(t, tt.prompt, reg)
 			if len(msgs) == 0 || msgs[0].OfSystem == nil {
 				t.Fatalf("first message is not the system message: %+v", msgs)
 			}
@@ -531,7 +572,7 @@ func TestBuildMessages_SkillLocation(t *testing.T) {
 
 			reg := skills.InitSkillsRegistry(".claude/skills")
 			var got []string
-			for _, m := range chat.BuildMessages(tt.prompt, reg) {
+			for _, m := range buildMessages(t, tt.prompt, reg) {
 				if m.OfUser != nil {
 					got = append(got, m.OfUser.Content.OfString.Value)
 				}
@@ -554,7 +595,7 @@ func TestBuildMessages_SkillToolInstructions(t *testing.T) {
 		t.Chdir(dir)
 
 		reg := skills.InitSkillsRegistry(".claude/skills")
-		msgs := chat.BuildMessages("What is the deploy target?", reg)
+		msgs := buildMessages(t, "What is the deploy target?", reg)
 		if len(msgs) == 0 || msgs[0].OfSystem == nil {
 			t.Fatalf("first message is not the system message: %+v", msgs)
 		}
@@ -570,7 +611,7 @@ func TestBuildMessages_SkillToolInstructions(t *testing.T) {
 	})
 
 	t.Run("no skills means no system message", func(t *testing.T) {
-		for _, m := range chat.BuildMessages("hello", nil) {
+		for _, m := range buildMessages(t, "hello", nil) {
 			if m.OfSystem != nil {
 				t.Errorf("unexpected system message: %q", m.OfSystem.Content.OfString.Value)
 			}

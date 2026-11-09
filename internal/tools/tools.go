@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/openai/openai-go/v3"
@@ -69,12 +69,19 @@ func readFunc(_ context.Context, args readArgs) (Result, error) {
 }
 
 type writeArgs struct {
-	FilePath string `json:"file_path"`
-	Content  string `json:"content"`
+	FilePath *string `json:"file_path"`
+	Content  *string `json:"content"`
 }
 
 func writeFunc(_ context.Context, args writeArgs) (Result, error) {
-	return Result{}, os.WriteFile(args.FilePath, []byte(args.Content), 0o600)
+	if args.Content == nil {
+		return Result{}, errors.New(`missing required argument "content"`)
+	}
+
+	if args.FilePath == nil {
+		return Result{}, errors.New(`missing required argument "file_path"`)
+	}
+	return Result{}, os.WriteFile(*args.FilePath, []byte(*args.Content), 0o600)
 }
 
 type ProcessError struct {
@@ -98,15 +105,20 @@ func runCommand(ctx context.Context, args []string, gracePeriod time.Duration) (
 	//nolint:gosec // G204: Bash tool intentionally executes user/LLM-provided commands
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(entry string) bool {
+		return strings.HasPrefix(entry, "OPENROUTER_API_KEY=")
+	})
+
 	// Send SIGTERM on context cancellation instead of the default SIGKILL.
-	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
-	}
+	setProcessGroup(cmd)
 
 	// Maximum time to wait after SIGTERM before escalating to SIGKILL.
 	cmd.WaitDelay = gracePeriod
 
 	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState.Success() {
+		return string(out), nil
+	}
 	if err != nil {
 		code := -1
 
@@ -127,10 +139,28 @@ type bashArgs struct {
 	Command string `json:"command"`
 }
 
-const bashGracePeriod = 100 * time.Second
+const (
+	bashGracePeriod = 5 * time.Second
+	bashTimeout     = 2 * time.Minute
+)
 
-func bashFunc(ctx context.Context, args bashArgs) (Result, error) {
-	out, err := runCommand(ctx, []string{"sh", "-c", args.Command}, bashGracePeriod)
+var errCommandTimeout = errors.New("command timed out")
+
+func bashFunc(ctx context.Context, args bashArgs, timeout time.Duration) (Result, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errCommandTimeout)
+	defer cancel()
+
+	cmdRunner := "sh"
+
+	if _, err := exec.LookPath("bash"); err == nil {
+		cmdRunner = "bash"
+	}
+
+	out, err := runCommand(ctx, []string{cmdRunner, "-c", args.Command}, bashGracePeriod)
+	if errors.Is(context.Cause(ctx), errCommandTimeout) {
+		return Result{Output: out}, fmt.Errorf("%w after %v", errCommandTimeout, timeout)
+	}
+
 	return Result{Output: out}, err
 }
 
@@ -149,7 +179,9 @@ func NewToolsRegistry(s skills.SkillRegistry) Registry {
 		Index: map[string]ToolFunc{
 			"Read":  withArgs(readFunc),
 			"Write": withArgs(writeFunc),
-			"Bash":  withArgs(bashFunc),
+			"Bash": withArgs(func(ctx context.Context, a bashArgs) (Result, error) {
+				return bashFunc(ctx, a, bashTimeout)
+			}),
 			"Skill": withArgs(func(_ context.Context, args skillArgs) (Result, error) {
 				skill, ok := s[args.Name]
 				if !ok {
@@ -157,7 +189,7 @@ func NewToolsRegistry(s skills.SkillRegistry) Registry {
 				}
 
 				return Result{
-					Output: skill.Msg(strings.Fields(args.Args)...),
+					Output: skill.Msg(args.Args),
 					Fork:   skill.Fork(),
 				}, nil
 			}),

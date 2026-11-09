@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -10,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -17,16 +21,100 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestNewMainArgs(t *testing.T) {
-	if got := newMainArgs([]string{"-p", "hi"}); got != "hi" {
-		t.Fatalf("got %q, want hi", got)
+	tests := []struct {
+		name        string
+		args        []string
+		want        string
+		wantTimeout time.Duration
+		wantErr     string // substring; empty means no error
+	}{
+		{name: "prompt", args: []string{"-p", "hi"}, want: "hi"},
+		{
+			name:        "prompt with run timeout",
+			args:        []string{"-p", "hi", "-timeout", "50ms"},
+			want:        "hi",
+			wantTimeout: 50 * time.Millisecond,
+		},
+		{name: "missing prompt", args: nil, wantErr: "prompt must not be empty"},
+		{name: "empty prompt", args: []string{"-p", ""}, wantErr: "prompt must not be empty"},
+		{name: "unknown flag", args: []string{"-x"}, wantErr: "flag provided but not defined: -x"},
+		{
+			name:    "unquoted prompt words",
+			args:    []string{"-p", "list", "all"},
+			wantErr: "quote the prompt",
+		},
+		// Locked in: extra arguments are reported before the empty prompt.
+		{name: "positional prompt", args: []string{"hello"}, wantErr: "quote the prompt"},
+		{
+			name:    "invalid timeout",
+			args:    []string{"-p", "hi", "-timeout", "soon"},
+			wantErr: `invalid value "soon" for flag -timeout`,
+		},
 	}
 
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic")
-		}
-	}()
-	newMainArgs(nil)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, timeout, err := newMainArgs(tt.args)
+			switch {
+			case tt.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)):
+				t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+			case tt.wantErr != "":
+				return
+			}
+			if got != tt.want || timeout != tt.wantTimeout {
+				t.Errorf("got (%q, %v), want (%q, %v)", got, timeout, tt.want, tt.wantTimeout)
+			}
+		})
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		want       int
+		wantStderr string
+	}{
+		{name: "success", err: nil, want: 0, wantStderr: ""},
+		{name: "plain error", err: errors.New("boom"), want: 1, wantStderr: "app: boom\n"},
+		{
+			name:       "ctrl-c",
+			err:        context.Canceled,
+			want:       130,
+			wantStderr: "app: context canceled\n",
+		},
+		{
+			name:       "wrapped ctrl-c",
+			err:        fmt.Errorf("chat completion: %w", context.Canceled),
+			want:       130,
+			wantStderr: "app: chat completion: context canceled\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if got := exitCode(tt.err, &stderr); got != tt.want {
+				t.Errorf("exitCode(%v) = %d, want %d", tt.err, got, tt.want)
+			}
+			if stderr.String() != tt.wantStderr {
+				t.Errorf("stderr = %q, want %q", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
+
+// stubExit replaces [exit] for the rest of the test and returns where the exit code is recorded.
+// -1 means exit was never called.
+func stubExit(t *testing.T) *int {
+	t.Helper()
+	code := -1
+	orig := exit
+	t.Cleanup(func() { exit = orig })
+	exit = func(c int) { code = c }
+	return &code
 }
 
 // captureStdout points [os.Stdout] at a temp file and returns a func reading what was written.
@@ -93,8 +181,12 @@ func TestMainFunc(t *testing.T) {
 	})
 
 	t.Run("tool call then answer is printed", func(t *testing.T) {
+		code := stubExit(t)
 		stdout := captureStdout(t)
 		main()
+		if *code != 0 {
+			t.Errorf("exit code = %d, want 0", *code)
+		}
 		if got := stdout(); got != "done" {
 			t.Errorf("stdout = %q, want %q", got, "done")
 		}
@@ -103,24 +195,86 @@ func TestMainFunc(t *testing.T) {
 		}
 	})
 
-	t.Run("stdout write failure panics", func(t *testing.T) {
+	t.Run("stdout write failure exits 1", func(t *testing.T) {
+		code := stubExit(t)
 		captureStdout(t)
 		_ = os.Stdout.Close()
-		defer func() {
-			if recover() == nil {
-				t.Fatal("expected panic")
-			}
-		}()
 		main()
+		if *code != 1 {
+			t.Errorf("exit code = %d, want 1", *code)
+		}
 	})
 
-	t.Run("api error panics", func(t *testing.T) {
-		defer func() {
-			if recover() == nil {
-				t.Fatal("expected panic")
-			}
-		}()
+	t.Run("api error exits 1", func(t *testing.T) {
+		code := stubExit(t)
 		main()
+		if *code != 1 {
+			t.Errorf("exit code = %d, want 1", *code)
+		}
+	})
+}
+
+//nolint:reassign // test overrides http.DefaultTransport
+func TestRun(t *testing.T) {
+	origTransport := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = origTransport })
+	t.Setenv("OPENROUTER_BASE_URL", "")
+	t.Chdir(t.TempDir())
+
+	t.Run("missing api key is an error", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "")
+		err := run(t.Context(), []string{"-p", "hi"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "OPENROUTER_API_KEY is not set") {
+			t.Fatalf("error = %v, want the missing key", err)
+		}
+	})
+
+	t.Run("bad arguments are an error", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test")
+		err := run(t.Context(), []string{"-p", "list", "all"}, io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "quote the prompt") {
+			t.Fatalf("error = %v, want the unquoted prompt error", err)
+		}
+	})
+
+	t.Run("answer is written to stdout", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test")
+		http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+			rec := httptest.NewRecorder()
+			rec.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(
+				rec,
+				`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`,
+			)
+			return rec.Result(), nil
+		})
+		var stdout bytes.Buffer
+		if err := run(t.Context(), []string{"-p", "hi"}, &stdout); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if stdout.String() != "done" {
+			t.Errorf("stdout = %q, want %q", stdout.String(), "done")
+		}
+	})
+
+	t.Run("run timeout aborts a hanging request", func(t *testing.T) {
+		t.Setenv("OPENROUTER_API_KEY", "test")
+		http.DefaultTransport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			<-r.Context().Done()
+			return nil, r.Context().Err()
+		})
+
+		start := time.Now()
+		err := run(t.Context(), []string{"-p", "hi", "-timeout", "50ms"}, io.Discard)
+		if elapsed := time.Since(start); elapsed > time.Second {
+			t.Errorf("returned after %v, want under 1s", elapsed)
+		}
+		if err == nil || !strings.Contains(err.Error(), "run timed out after 50ms") {
+			t.Fatalf("error = %v, want containing %q", err, "run timed out after 50ms")
+		}
+		if code := exitCode(err, io.Discard); code != 1 {
+			t.Errorf("exitCode = %d, want 1", code)
+		}
 	})
 }
 
@@ -229,10 +383,11 @@ func TestMainFunc_SkillTool(t *testing.T) {
 }
 
 // setupSkillEnv chdirs into a temp dir populated with files and sets [os.Args], API key, and
-// cleanup for [os.Args] and [http.DefaultTransport].
+// cleanup for [os.Args] and [http.DefaultTransport]. It stubs [exit] and returns where the exit
+// code is recorded.
 //
 //nolint:reassign // test overrides os.Args and http.DefaultTransport
-func setupSkillEnv(t *testing.T, prompt string, files map[string]string) {
+func setupSkillEnv(t *testing.T, prompt string, files map[string]string) *int {
 	t.Helper()
 	origArgs, origTransport := os.Args, http.DefaultTransport
 	t.Cleanup(func() {
@@ -253,6 +408,7 @@ func setupSkillEnv(t *testing.T, prompt string, files map[string]string) {
 
 	os.Args = []string{"app", "-p", prompt}
 	t.Setenv("OPENROUTER_API_KEY", "test")
+	return stubExit(t)
 }
 
 // runSkillScenario runs main in a project with the apple and grape skills. The fake model
@@ -315,6 +471,9 @@ const forkSkill = "---\nname: apple\n" +
 
 const forkBody = "Respond with exactly one word: blueberry"
 
+// forkedMsg is the main conversation's user message after /apple ran the fork skill.
+const forkedMsg = "Skill apple ran in a subagent and returned:\n\nblueberry"
+
 // messageText decodes a message content that was sent as a plain string.
 func messageText(t *testing.T, raw json.RawMessage) string {
 	t.Helper()
@@ -326,13 +485,18 @@ func messageText(t *testing.T, raw json.RawMessage) string {
 }
 
 // forkModelReply answers like the tester's model: a conversation that starts with the forked
-// body is the subagent, a main conversation ending in a tool result gets the final answer, and
-// anything else calls the Skill tool.
+// body is the subagent, a main conversation ending in a tool result or in the subagent's answer
+// gets the final answer, and anything else calls the Skill tool.
 func forkModelReply(req chatRequest) string {
+	var last string
+	if len(req.Messages) > 0 {
+		last = string(req.Messages[len(req.Messages)-1].Content)
+	}
 	switch {
 	case len(req.Messages) > 0 && strings.Contains(string(req.Messages[0].Content), forkBody):
 		return `{"choices":[{"message":{"role":"assistant","content":"blueberry"}}]}`
-	case len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool":
+	case len(req.Messages) > 0 && req.Messages[len(req.Messages)-1].Role == "tool",
+		strings.Contains(last, "ran in a subagent and returned"):
 		return `{"choices":[{"message":{"role":"assistant","content":"The on-call engineer is blueberry."}}]}`
 	default:
 		return `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"s1","type":"function",` +
@@ -340,13 +504,13 @@ func forkModelReply(req chatRequest) string {
 	}
 }
 
-// runForkScenario runs main in a project with the forked apple skill and the grape decoy. It
-// returns every request and what main printed to stdout.
+// runForkScenario runs main with prompt in a project with the forked apple skill and the grape
+// decoy. It returns every request, what main printed to stdout, and the exit code.
 //
 //nolint:reassign // test overrides http.DefaultTransport
-func runForkScenario(t *testing.T) ([]chatRequest, string) {
+func runForkScenario(t *testing.T, prompt string) ([]chatRequest, string, int) {
 	t.Helper()
-	setupSkillEnv(t, "Who is on the on-call rotation right now?", map[string]string{
+	code := setupSkillEnv(t, prompt, map[string]string{
 		".claude/skills/apple/SKILL.md": forkSkill,
 		".claude/skills/grape/SKILL.md": formatSkill,
 	})
@@ -366,11 +530,14 @@ func runForkScenario(t *testing.T) ([]chatRequest, string) {
 	})
 
 	main()
-	return requests, stdout()
+	return requests, stdout(), *code
 }
 
 func TestMainFunc_ForkSkill(t *testing.T) {
-	requests, stdout := runForkScenario(t)
+	requests, stdout, code := runForkScenario(t, "Who is on the on-call rotation right now?")
+	if code != 0 {
+		t.Errorf("exit code = %d, want 0", code)
+	}
 	if len(requests) != 3 {
 		t.Fatalf("got %d requests, want 3 (main, subagent, main)", len(requests))
 	}
@@ -406,4 +573,62 @@ func TestMainFunc_ForkSkill(t *testing.T) {
 			t.Errorf("stdout = %q", stdout)
 		}
 	})
+}
+
+func TestMainFunc_SlashForkSkill(t *testing.T) {
+	t.Run("slash command runs the skill in a subagent", func(t *testing.T) {
+		requests, stdout, code := runForkScenario(t, "/apple")
+		if code != 0 {
+			t.Errorf("exit code = %d, want 0", code)
+		}
+		if len(requests) != 2 {
+			t.Fatalf("got %d requests, want 2 (subagent, main)", len(requests))
+		}
+
+		sub := requests[0]
+		if len(sub.Messages) != 1 || sub.Messages[0].Role != "user" {
+			t.Fatalf("subagent messages = %+v, want one user message", sub.Messages)
+		}
+		want := "Skill: apple (located at .claude/skills/apple)\n" +
+			"Paths in the instructions below are relative to that folder.\n\n" + forkBody
+		if got := messageText(t, sub.Messages[0].Content); got != want {
+			t.Errorf("subagent prompt = %q, want %q", got, want)
+		}
+
+		conv := requests[1].Messages
+		for _, m := range conv {
+			if strings.Contains(string(m.Content), forkBody) {
+				t.Errorf("main conversation carries the skill body in a %s message", m.Role)
+			}
+		}
+		last := conv[len(conv)-1]
+		if last.Role != "user" || messageText(t, last.Content) != forkedMsg {
+			t.Errorf("last main message = %s %s, want user %q", last.Role, last.Content, forkedMsg)
+		}
+
+		if stdout != "The on-call engineer is blueberry." {
+			t.Errorf("stdout = %q", stdout)
+		}
+	})
+}
+
+//nolint:reassign // test overrides http.DefaultTransport
+func TestMainFunc_SlashForkSkillFailure(t *testing.T) {
+	code := setupSkillEnv(t, "/apple", map[string]string{
+		".claude/skills/apple/SKILL.md": forkSkill,
+	})
+	stdout := captureStdout(t)
+	http.DefaultTransport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		rec := httptest.NewRecorder()
+		rec.WriteHeader(http.StatusBadRequest)
+		return rec.Result(), nil
+	})
+
+	main()
+	if *code != 1 {
+		t.Errorf("exit code = %d, want 1", *code)
+	}
+	if got := stdout(); got != "" {
+		t.Errorf("stdout = %q, want nothing", got)
+	}
 }
